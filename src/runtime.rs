@@ -1,4 +1,4 @@
-use crate::{jimage, JayError};
+use crate::{class_path::ClassPath, JayError};
 
 pub struct Runtime<CP: ClassPath> {
     class_path: CP,
@@ -16,15 +16,5 @@ impl<CP: ClassPath> Runtime<CP> {
             .find_resource(&main_resource)
             .ok_or_else(|| JayError::NotFound(String::from(main_resource)))?;
         Ok(())
-    }
-}
-
-pub trait ClassPath {
-    fn find_resource(&self, name: &str) -> Option<Box<[u8]>>;
-}
-
-impl ClassPath for jimage::Archive<'_> {
-    fn find_resource(&self, name: &str) -> Option<Box<[u8]>> {
-        self.by_name(name).map(|r| r.bytes().into())
     }
 }

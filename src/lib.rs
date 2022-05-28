@@ -1,3 +1,4 @@
+pub mod class_path;
 mod error;
 pub mod jimage;
 mod runtime;
