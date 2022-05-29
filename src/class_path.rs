@@ -1,14 +1,21 @@
-use std::{fs::File, io::Read, path::PathBuf};
+use std::{
+    fs::File,
+    io::{Cursor, Read, Seek},
+    path::PathBuf,
+};
 
 use crate::jimage;
 
+pub trait SeekRead: Read + Seek {}
+impl<T: Seek + Read> SeekRead for T {}
+
 pub trait ClassPath {
-    fn find_resource(&self, name: &str) -> Option<Box<[u8]>>;
+    fn find_resource(&self, name: &str) -> Option<Box<dyn SeekRead + '_>>;
 }
 
 impl ClassPath for jimage::Archive<'_> {
-    fn find_resource(&self, name: &str) -> Option<Box<[u8]>> {
-        self.by_name(name).map(|r| r.bytes().into())
+    fn find_resource(&self, name: &str) -> Option<Box<dyn SeekRead + '_>> {
+        Some(Box::new(Cursor::new(self.by_name(name)?.bytes())))
     }
 }
 
@@ -23,16 +30,13 @@ impl DirClassPath {
     }
 }
 impl ClassPath for DirClassPath {
-    fn find_resource(&self, name: &str) -> Option<Box<[u8]>> {
-        let mut file = File::open(self.0.join(name)).ok()?;
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf).ok()?;
-        Some(buf.into_boxed_slice())
+    fn find_resource(&self, name: &str) -> Option<Box<dyn SeekRead>> {
+        Some(Box::new(File::open(self.0.join(name)).ok()?))
     }
 }
 
-impl<'a> ClassPath for Box<[&'a dyn ClassPath]> {
-    fn find_resource(&self, name: &str) -> Option<Box<[u8]>> {
+impl ClassPath for Box<[&'_ dyn ClassPath]> {
+    fn find_resource(&self, name: &str) -> Option<Box<dyn SeekRead + '_>> {
         self.iter()
             .flat_map(|cp| cp.find_resource(name).into_iter())
             .next()

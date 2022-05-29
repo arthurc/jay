@@ -261,10 +261,10 @@ impl<'a> Resource<'a> {
         self.attributes[AttributeKind::Offset as usize] as usize
     }
 
-    pub fn bytes(&self) -> &[u8] {
+    pub fn bytes(&self) -> &'a [u8] {
         let offset = self.archive.resource_data_start + self.offset();
         let size = self.attributes[AttributeKind::Uncompressed as usize] as usize;
-        &self.archive.buf.as_ref()[offset..offset + size]
+        &self.archive.buf[offset..offset + size]
     }
 
     fn string_at(&self, attribute_kind: AttributeKind) -> &str {

@@ -1,6 +1,6 @@
-use crate::{class_path::ClassPath, JayError};
+use crate::{class_file, class_path::ClassPath, JayError};
 
-pub struct Runtime<CP: ClassPath> {
+pub struct Runtime<CP> {
     class_path: CP,
 }
 
@@ -10,11 +10,18 @@ impl<CP: ClassPath> Runtime<CP> {
     }
 
     pub fn run_with_main(&self, main_class_name: &str) -> Result<(), JayError> {
-        let main_resource = main_class_name.replace(".", "/") + ".class";
-        let _bytes = self
+        let class_name = main_class_name;
+
+        let resource_name = class_name.replace(".", "/") + ".class";
+        let bytes = self
             .class_path
-            .find_resource(&main_resource)
-            .ok_or_else(|| JayError::NotFound(String::from(main_resource)))?;
+            .find_resource(&resource_name)
+            .ok_or_else(|| JayError::NotFound(String::from(resource_name)))?;
+
+        class_file::parse(bytes, |event| {
+            dbg!(event);
+        })?;
+
         Ok(())
     }
 }
