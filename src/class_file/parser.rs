@@ -7,97 +7,82 @@ use super::{constant_pool::CpInfo, *};
 type Result<T, E = ClassFileError> = std::result::Result<T, E>;
 type Endian = BigEndian;
 
-#[derive(Debug)]
-pub enum ParseEvent {
-    ConstantPool(ConstantPool),
-    ClassInfo(ClassInfo),
-    Field(FieldInfo),
-    Method(MethodInfo),
-    Attributes(Vec<Attribute>),
-}
-
-pub(crate) struct Parser<R, F> {
+pub(crate) struct Parser<R> {
     r: BufReader<R>,
-    f: F,
 }
-impl<'a, R: Read + Seek, F: FnMut(ParseEvent)> Parser<R, F> {
-    pub fn new(r: R, f: F) -> Self {
+impl<R: Read + Seek> Parser<R> {
+    pub fn new(r: R) -> Self {
         Self {
             r: BufReader::new(r),
-            f,
         }
     }
 
-    pub fn parse(mut self) -> Result<()> {
+    pub fn parse(&mut self) -> Result<ClassFile> {
         let _ = self.parse_magic_identifier()?;
         let _version = self.parse_version()?;
 
-        let constnat_pool = self.parse_constant_pool()?;
-        (self.f)(ParseEvent::ConstantPool(constnat_pool));
-
-        let access_flags = self.read_u16()?;
+        let constant_pool = self.parse_constant_pool()?;
+        let access_flags = AccessFlags::from_bits_truncate(self.read_u16()?);
         let this_class = self.read_u16()?;
         let super_class = self.read_u16()?;
         let interfaces_count = self.read_u16()?;
+
         let mut interfaces = vec![0u16; interfaces_count as usize];
         self.r.read_u16_into::<Endian>(&mut interfaces)?;
 
-        (self.f)(ParseEvent::ClassInfo(ClassInfo {
-            access_flags: AccessFlags::from_bits_truncate(access_flags),
+        let fields_count = self.read_u16()?;
+        let fields = (0..fields_count)
+            .map(|_| self.parse_field_info())
+            .collect::<Result<Vec<_>>>()?;
+
+        let methods_count = self.read_u16()?;
+        let methods = (0..methods_count)
+            .map(|_| self.parse_method_info())
+            .collect::<Result<Vec<_>>>()?;
+
+        let attributes_count = self.read_u16()?;
+        let attributes = self.parse_attributes(attributes_count)?;
+
+        Ok(ClassFile {
+            constant_pool,
+            access_flags,
             this_class,
             super_class,
             interfaces,
-        }));
-
-        let fields_count = self.read_u16()?;
-        for _ in 0..fields_count {
-            self.parse_field_info()?;
-        }
-
-        let methods_count = self.read_u16()?;
-        for _ in 0..methods_count {
-            self.parse_method_info()?;
-        }
-
-        let attributes_count = self.read_u16()?;
-        let attributes = self.parse_attributes(attributes_count)?;
-        (self.f)(ParseEvent::Attributes(attributes));
-
-        Ok(())
+            fields,
+            methods,
+            attributes,
+        })
     }
 
-    fn parse_field_info(&mut self) -> Result<()> {
-        let access_flags = self.read_u16()?;
+    fn parse_field_info(&mut self) -> Result<FieldInfo> {
+        let access_flags = AccessFlags::from_bits_truncate(self.read_u16()?);
         let name_index = self.read_u16()?;
         let descriptor_index = self.read_u16()?;
         let attributes_count = self.read_u16()?;
         let attributes = self.parse_attributes(attributes_count)?;
 
-        (self.f)(ParseEvent::Field(FieldInfo {
-            access_flags: AccessFlags::from_bits_truncate(access_flags),
+        Ok(FieldInfo {
+            access_flags,
             name_index,
             descriptor_index,
             attributes,
-        }));
-
-        Ok(())
+        })
     }
 
-    fn parse_method_info(&mut self) -> Result<()> {
-        let access_flags = self.read_u16()?;
+    fn parse_method_info(&mut self) -> Result<MethodInfo> {
+        let access_flags = AccessFlags::from_bits_truncate(self.read_u16()?);
         let name_index = self.read_u16()?;
         let descriptor_index = self.read_u16()?;
         let attributes_count = self.read_u16()?;
         let attributes = self.parse_attributes(attributes_count)?;
 
-        (self.f)(ParseEvent::Method(MethodInfo {
-            access_flags: AccessFlags::from_bits_truncate(access_flags),
+        Ok(MethodInfo {
+            access_flags,
             name_index,
             descriptor_index,
             attributes,
-        }));
-
-        Ok(())
+        })
     }
 
     fn parse_magic_identifier(&mut self) -> Result<()> {
@@ -268,7 +253,7 @@ impl<'a, R: Read + Seek, F: FnMut(ParseEvent)> Parser<R, F> {
         })
     }
 
-    pub fn parse_code_attribute(&mut self) -> Result<CodeAttribute> {
+    pub fn _parse_code_attribute(&mut self) -> Result<CodeAttribute> {
         let max_stack = self.read_u16()?;
         let max_locals = self.read_u16()?;
         let code_length = self.read_u32()?;
@@ -277,7 +262,7 @@ impl<'a, R: Read + Seek, F: FnMut(ParseEvent)> Parser<R, F> {
         let exception_table_length = self.read_u16()?;
         let exception_table = (0..exception_table_length)
             .into_iter()
-            .map(|_| self.parse_exception_table_entry())
+            .map(|_| self._parse_exception_table_entry())
             .collect::<Result<Vec<_>>>()?;
         let attributes_count = self.read_u16()?;
         let attributes = self.parse_attributes(attributes_count)?;
@@ -291,7 +276,7 @@ impl<'a, R: Read + Seek, F: FnMut(ParseEvent)> Parser<R, F> {
         })
     }
 
-    fn parse_exception_table_entry(&mut self) -> Result<ExceptionTableEntry> {
+    fn _parse_exception_table_entry(&mut self) -> Result<ExceptionTableEntry> {
         let start_pc = self.read_u16()?;
         let end_pc = self.read_u16()?;
         let handler_pc = self.read_u16()?;

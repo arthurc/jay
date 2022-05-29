@@ -10,20 +10,22 @@ pub use access_flags::*;
 pub use attributes::*;
 pub use constant_pool::ConstantPool;
 pub use error::ClassFileError;
-pub use parser::ParseEvent;
-
-pub fn parse<F: FnMut(ParseEvent)>(bytes: impl Read + Seek, f: F) -> Result<(), ClassFileError> {
-    parser::Parser::new(bytes, f).parse()?;
-
-    Ok(())
-}
 
 #[derive(Debug)]
-pub struct ClassInfo {
+pub struct ClassFile {
+    pub constant_pool: ConstantPool,
     pub access_flags: AccessFlags,
     pub this_class: u16,
     pub super_class: u16,
     pub interfaces: Vec<u16>,
+    pub fields: Vec<FieldInfo>,
+    pub methods: Vec<MethodInfo>,
+    pub attributes: Vec<Attribute>,
+}
+impl ClassFile {
+    pub fn parse(bytes: impl Read + Seek) -> Result<ClassFile, ClassFileError> {
+        Ok(parser::Parser::new(bytes).parse()?)
+    }
 }
 
 #[derive(Debug)]
@@ -52,19 +54,19 @@ mod tests {
 
     #[test]
     fn test_parse_cp_info_utf8() {
-        let mut constant_pool = ConstantPool::default();
-        parse(
-            Cursor::new(include_bytes!("../../classes/com/example/Main.class")),
-            |event| {
-                if let ParseEvent::ConstantPool(pool) = event {
-                    constant_pool = pool;
-                }
-            },
-        )
+        let class_file = ClassFile::parse(Cursor::new(include_bytes!(
+            "../../classes/com/example/Main.class"
+        )))
         .unwrap();
 
-        assert!(constant_pool.contains(&CpInfo::Utf8(String::from("<init>"))));
-        assert!(constant_pool.contains(&CpInfo::Utf8(String::from("main"))));
-        assert!(constant_pool.contains(&CpInfo::Utf8(String::from("Code"))));
+        assert!(class_file
+            .constant_pool
+            .contains(&CpInfo::Utf8(String::from("<init>"))));
+        assert!(class_file
+            .constant_pool
+            .contains(&CpInfo::Utf8(String::from("main"))));
+        assert!(class_file
+            .constant_pool
+            .contains(&CpInfo::Utf8(String::from("Code"))));
     }
 }

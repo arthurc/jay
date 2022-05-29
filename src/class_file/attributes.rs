@@ -1,7 +1,16 @@
-#[derive(Debug)]
+use std::fmt;
+
 pub struct Attribute {
     pub attribute_name_index: u16,
     pub info: Vec<u8>,
+}
+impl fmt::Debug for Attribute {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Attribute")
+            .field("attribute_name_index", &self.attribute_name_index)
+            .field("info", &format!("({} bytes)", self.info.len()))
+            .finish()
+    }
 }
 
 #[derive(Debug)]

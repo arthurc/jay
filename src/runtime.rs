@@ -1,4 +1,4 @@
-use crate::{class_file, class_path::ClassPath, JayError};
+use crate::{class_file::ClassFile, class_path::ClassPath, JayError};
 
 pub struct Runtime<CP> {
     class_path: CP,
@@ -17,10 +17,7 @@ impl<CP: ClassPath> Runtime<CP> {
             .class_path
             .find_resource(&resource_name)
             .ok_or_else(|| JayError::NotFound(String::from(resource_name)))?;
-
-        class_file::parse(bytes, |event| {
-            dbg!(event);
-        })?;
+        let _class_file = dbg!(ClassFile::parse(bytes)?);
 
         Ok(())
     }
