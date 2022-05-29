@@ -1,6 +1,7 @@
 #[derive(Debug)]
 pub enum ClassFileError {
     ReadError(String, usize),
+    UnexpectedConstantPoolEntry(String),
     IOError(std::io::Error),
 }
 

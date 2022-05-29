@@ -1,5 +1,7 @@
 use std::{fmt, ops::Index};
 
+use super::*;
+
 #[derive(Default)]
 pub struct ConstantPool {
     cp_infos: Vec<CpInfo>,
@@ -56,12 +58,12 @@ impl ConstantPool {
             self.cp_infos[*class_index as usize - 1]
                 .to_class_info()
                 .map(|i| self.fmt_class_info(i))
-                .unwrap_or_else(|| String::from("???")),
+                .unwrap_or_else(|_| String::from("???")),
             name_and_type_index,
             self.cp_infos[*name_and_type_index as usize - 1]
                 .to_name_and_type()
                 .map(|nt| self.fmt_name_and_type_index(nt))
-                .unwrap_or_else(|| String::from("???"))
+                .unwrap_or_else(|_| String::from("???"))
         )
     }
 }
@@ -141,38 +143,33 @@ pub enum CpInfo {
     Unusable,
 }
 impl CpInfo {
-    pub fn to_utf8(&self) -> Option<&str> {
+    pub fn to_utf8(&self) -> Result<&str> {
         match self {
-            Self::Utf8(s) => Some(s),
-            _ => None,
+            Self::Utf8(s) => Ok(s),
+            _ => Err(ClassFileError::UnexpectedConstantPoolEntry(format!(
+                "Expected Utf8, found {:?}",
+                self,
+            ))),
         }
     }
 
-    pub fn to_field_ref(&self) -> &RefInfo {
+    pub fn to_class_info(&self) -> Result<&ClassInfo> {
         match self {
-            Self::FieldRef(r) => r,
-            _ => panic!("Expected FieldRef, got {:?}", self),
+            Self::Class(i) => Ok(i),
+            _ => Err(ClassFileError::UnexpectedConstantPoolEntry(format!(
+                "Expected ClassInfo, found {:?}",
+                self,
+            ))),
         }
     }
 
-    pub fn to_class_info(&self) -> Option<&ClassInfo> {
+    pub fn to_name_and_type(&self) -> Result<&NameAndTypeInfo> {
         match self {
-            Self::Class(i) => Some(i),
-            _ => None,
-        }
-    }
-
-    pub fn to_name_and_type(&self) -> Option<&NameAndTypeInfo> {
-        match self {
-            Self::NameAndType(n) => Some(n),
-            _ => None,
-        }
-    }
-
-    pub fn to_method_ref(&self) -> &RefInfo {
-        match self {
-            Self::MethodRef(m) => m,
-            _ => panic!("Expected MethodRef, got {:?}", self),
+            Self::NameAndType(n) => Ok(n),
+            _ => Err(ClassFileError::UnexpectedConstantPoolEntry(format!(
+                "Expected NameAndType, found {:?}",
+                self,
+            ))),
         }
     }
 }

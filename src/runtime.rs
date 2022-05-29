@@ -39,37 +39,14 @@ impl<CP: ClassPath> Runtime<CP> {
             .ok_or_else(|| JayError::NotFound(String::from(resource_name)))?;
         let class_file = ClassFile::parse(bytes)?;
 
-        let constant_pool::ClassInfo { name_index } = class_file.constant_pool
-            [class_file.this_class]
-            .to_class_info()
-            .ok_or_else(|| {
-                JayError::ClassLoadError(format!(
-                    "This class not a class info: {}",
-                    class_file.this_class
-                ))
-            })?;
+        let constant_pool::ClassInfo { name_index } =
+            class_file.constant_pool[class_file.this_class].to_class_info()?;
 
-        let name = class_file.constant_pool[*name_index]
-            .to_utf8()
-            .ok_or_else(|| {
-                JayError::ClassLoadError(format!(
-                    "Class name not a string: {}",
-                    class_file.this_class
-                ))
-            })?
-            .to_string();
+        let name = class_file.constant_pool[*name_index].to_utf8()?.to_string();
 
         let super_class = if class_file.super_class != 0 {
-            let super_class = class_file.constant_pool[class_file.super_class]
-                .to_class_info()
-                .ok_or_else(|| {
-                    JayError::ClassLoadError(format!("Super class is not a class info"))
-                })?;
-            let super_class = class_file.constant_pool[super_class.name_index]
-                .to_utf8()
-                .ok_or_else(|| {
-                    JayError::ClassLoadError(format!("Super class name expected a utf8"))
-                })?;
+            let super_class = class_file.constant_pool[class_file.super_class].to_class_info()?;
+            let super_class = class_file.constant_pool[super_class.name_index].to_utf8()?;
             Some(self.load_class(super_class)?)
         } else {
             None

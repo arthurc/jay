@@ -11,6 +11,8 @@ pub use attributes::*;
 pub use constant_pool::ConstantPool;
 pub use error::ClassFileError;
 
+type Result<T, E = ClassFileError> = std::result::Result<T, E>;
+
 #[derive(Debug)]
 pub struct ClassFile {
     pub constant_pool: ConstantPool,
@@ -23,7 +25,7 @@ pub struct ClassFile {
     pub attributes: Vec<Attribute>,
 }
 impl ClassFile {
-    pub fn parse(bytes: impl Read + Seek) -> Result<ClassFile, ClassFileError> {
+    pub fn parse(bytes: impl Read + Seek) -> Result<ClassFile> {
         Ok(parser::Parser::new(bytes).parse()?)
     }
 }
