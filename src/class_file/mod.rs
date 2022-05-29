@@ -1,6 +1,6 @@
 mod access_flags;
 mod attributes;
-mod constant_pool;
+pub(crate) mod constant_pool;
 mod error;
 mod parser;
 

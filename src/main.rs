@@ -7,6 +7,8 @@ use jay::{
 use memmap::Mmap;
 
 fn main() -> Result<(), JayError> {
+    pretty_env_logger::init();
+
     let path = env::var("JAVA_HOME")
         .map(|s| PathBuf::from(s).join("lib/modules"))
         .unwrap();

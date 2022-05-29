@@ -15,7 +15,9 @@ pub trait ClassPath {
 
 impl ClassPath for jimage::Archive<'_> {
     fn find_resource(&self, name: &str) -> Option<Box<dyn SeekRead + '_>> {
-        Some(Box::new(Cursor::new(self.by_name(name)?.bytes())))
+        Some(Box::new(Cursor::new(
+            self.by_name(&format!("/java.base/{}", name))?.bytes(),
+        )))
     }
 }
 

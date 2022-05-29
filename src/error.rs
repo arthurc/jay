@@ -8,6 +8,7 @@ pub enum JayError {
     NotFound(String),
     JImageError(jimage::JImageError),
     ClassFileError(class_file::ClassFileError),
+    ClassLoadError(String),
 }
 
 impl From<JImageError> for JayError {
