@@ -37,7 +37,7 @@ impl ClassPath for DirClassPath {
     }
 }
 
-impl ClassPath for Box<[&'_ dyn ClassPath]> {
+impl ClassPath for Vec<Box<dyn ClassPath + '_>> {
     fn find_resource(&self, name: &str) -> Option<Box<dyn SeekRead + '_>> {
         self.iter()
             .flat_map(|cp| cp.find_resource(name).into_iter())

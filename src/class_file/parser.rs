@@ -241,7 +241,7 @@ impl<R: Read + Seek> Parser<R> {
         })
     }
 
-    pub fn parse_attribute(&mut self) -> Result<Attribute> {
+    fn parse_attribute(&mut self) -> Result<Attribute> {
         let attribute_name_index = self.read_u16()?;
         let attribute_length = self.read_u32()?;
         let mut info = vec![0u8; attribute_length as usize];
@@ -253,7 +253,7 @@ impl<R: Read + Seek> Parser<R> {
         })
     }
 
-    pub fn _parse_code_attribute(&mut self) -> Result<CodeAttribute> {
+    pub fn parse_code_attribute(&mut self) -> Result<CodeAttribute> {
         let max_stack = self.read_u16()?;
         let max_locals = self.read_u16()?;
         let code_length = self.read_u32()?;
@@ -290,11 +290,12 @@ impl<R: Read + Seek> Parser<R> {
         })
     }
 
-    fn parse_attributes(&mut self, attributes_count: u16) -> Result<Vec<Attribute>> {
+    fn parse_attributes(&mut self, attributes_count: u16) -> Result<Attributes> {
         (0..attributes_count)
             .into_iter()
             .map(|_| self.parse_attribute())
             .collect::<Result<Vec<_>>>()
+            .map(Attributes)
     }
 
     fn read_u32(&mut self) -> Result<u32> {

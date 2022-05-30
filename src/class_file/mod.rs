@@ -22,7 +22,7 @@ pub struct ClassFile {
     pub interfaces: Vec<u16>,
     pub fields: Vec<FieldInfo>,
     pub methods: Vec<MethodInfo>,
-    pub attributes: Vec<Attribute>,
+    pub attributes: Attributes,
 }
 impl ClassFile {
     pub fn parse(bytes: impl Read + Seek) -> Result<ClassFile> {
@@ -35,7 +35,7 @@ pub struct FieldInfo {
     pub access_flags: AccessFlags,
     pub name_index: u16,
     pub descriptor_index: u16,
-    pub attributes: Vec<Attribute>,
+    pub attributes: Attributes,
 }
 
 #[derive(Debug)]
@@ -43,7 +43,7 @@ pub struct MethodInfo {
     pub access_flags: AccessFlags,
     pub name_index: u16,
     pub descriptor_index: u16,
-    pub attributes: Vec<Attribute>,
+    pub attributes: Attributes,
 }
 
 #[cfg(test)]

@@ -17,15 +17,13 @@ fn main() -> Result<(), JayError> {
 
     let jimage = jimage::Archive::parse(&mmap)?;
 
-    let classes = DirClassPath::new("classes".into());
-
-    let mut class_paths: Vec<&dyn ClassPath> = Vec::new();
-    class_paths.push(&jimage);
-    if let Some(classes) = classes.as_ref() {
-        class_paths.push(classes);
+    let mut class_paths: Vec<Box<dyn ClassPath>> = Vec::new();
+    class_paths.push(Box::new(jimage));
+    if let Some(classes) = DirClassPath::new("classes".into()).take() {
+        class_paths.push(Box::new(classes));
     }
 
-    let runtime = Runtime::new(class_paths.into_boxed_slice());
+    let runtime = Runtime::new(Box::new(class_paths));
     runtime.run_with_main("com.example.Main")?;
     Ok(())
 }

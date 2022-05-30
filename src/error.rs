@@ -9,6 +9,7 @@ pub enum JayError {
     JImageError(jimage::JImageError),
     ClassFileError(class_file::ClassFileError),
     ClassLoadError(String),
+    NoSuchMethod(String),
 }
 
 impl From<JImageError> for JayError {
