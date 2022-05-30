@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use log::trace;
 
 use crate::{
-    class_file::{constant_pool, ClassFile},
+    class_file::{constant_pool, ClassFile, MethodInfo},
     class_path::ClassPath,
     JayError,
 };
@@ -24,7 +24,7 @@ impl<CP: ClassPath> Runtime<CP> {
     pub fn run_with_main(&self, main_class_name: &str) -> Result<(), JayError> {
         let class = self.load_class(main_class_name)?;
 
-        let x = &self.classes.borrow()[class];
+        let x = dbg!(&self.classes.borrow()[class]);
 
         Ok(())
     }
@@ -52,11 +52,25 @@ impl<CP: ClassPath> Runtime<CP> {
             None
         };
 
-        self.add_class(Class { name, super_class })
+        self.add_class(Class {
+            name,
+            super_class,
+            methods: class_file
+                .methods
+                .iter()
+                .map(|MethodInfo { name_index, .. }| {
+                    class_file.constant_pool[*name_index]
+                        .to_utf8()
+                        .map(|name| Method {
+                            name: name.to_owned(),
+                        })
+                })
+                .collect::<Result<_, _>>()?,
+        })
     }
 
     fn add_class(&self, class: Class) -> Result<ClassId, JayError> {
-        self.classes.borrow_mut().push(dbg!(class));
+        self.classes.borrow_mut().push(class);
 
         Ok(self.classes.borrow().len() - 1)
     }
@@ -68,4 +82,10 @@ type ClassId = usize;
 struct Class {
     name: String,
     super_class: Option<ClassId>,
+    methods: Vec<Method>,
+}
+
+#[derive(Debug)]
+struct Method {
+    name: String,
 }
