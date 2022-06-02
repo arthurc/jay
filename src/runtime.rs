@@ -1,9 +1,11 @@
 use std::cell::RefCell;
 
+use constant_pool::ConstantPool;
 use log::trace;
 
 use crate::{
-    class_file::{constant_pool, ClassFile, CodeAttribute, MethodInfo},
+    bytecode::{Bytecode, BytecodeStream},
+    class_file::{constant_pool, AccessFlags, ClassFile, CodeAttribute, MethodInfo},
     class_path::ClassPath,
     JayError,
 };
@@ -25,9 +27,11 @@ impl<'a> Runtime<'a> {
         let class_id = self.load_class(main_class_name)?;
 
         let classes = self.classes.borrow();
-        let main = classes[class_id].find_method("main", &[])?;
+        let main = classes[class_id]
+            .find_method("main", &[])
+            .ok_or_else(|| JayError::NoSuchMethod("main".to_owned()))?;
 
-        main.invoke(self);
+        main.invoke(self)?;
 
         Ok(())
     }
@@ -55,32 +59,50 @@ impl<'a> Runtime<'a> {
             None
         };
 
+        let methods = class_file
+            .methods
+            .iter()
+            .map(
+                |MethodInfo {
+                     name_index,
+                     attributes,
+                     access_flags,
+                     ..
+                 }| {
+                    let name = class_file.constant_pool[*name_index].to_utf8()?;
+                    let code_attribute = attributes.code_attribute(&class_file.constant_pool);
+                    let body = code_attribute
+                        .map(|code_attribute| -> Box<dyn MethodBody> { Box::new(code_attribute) })
+                        .or_else(|| {
+                            if access_flags.contains(AccessFlags::NATIVE) {
+                                Some(Box::new(NativeMethodBody))
+                            } else {
+                                None
+                            }
+                        })
+                        .ok_or_else(|| {
+                            JayError::ClassLoadError(format!("No method body found for {}", name))
+                        })?;
+
+                    Ok(Method {
+                        name: name.to_owned(),
+                        body,
+                    })
+                },
+            )
+            .collect::<Result<_, JayError>>()?;
+
         let class_id = self.add_class(Class {
             name,
             super_class,
-            methods: class_file
-                .methods
-                .iter()
-                .map(
-                    |MethodInfo {
-                         name_index,
-                         attributes,
-                         ..
-                     }| {
-                        class_file.constant_pool[*name_index].to_utf8().map(|name| {
-                            let code_attribute =
-                                attributes.code_attribute(&class_file.constant_pool);
-
-                            Method {
-                                name: name.to_owned(),
-                                body: code_attribute
-                                    .map(|b| -> Box<dyn MethodBody> { Box::new(b) }),
-                            }
-                        })
-                    },
-                )
-                .collect::<Result<_, _>>()?,
+            constant_pool: class_file.constant_pool,
+            methods,
         })?;
+
+        let classes = self.classes.borrow();
+        if let Some(clinit) = classes[class_id].find_method("<clinit>", &[]) {
+            clinit.invoke(self);
+        }
 
         Ok(class_id)
     }
@@ -97,35 +119,80 @@ type ClassId = usize;
 struct Class {
     name: String,
     super_class: Option<ClassId>,
+    constant_pool: ConstantPool,
     methods: Vec<Method>,
 }
 impl Class {
-    fn find_method(&self, name: &str, parameter_types: &[Type]) -> Result<&Method, JayError> {
+    fn find_method(&self, name: &str, parameter_types: &[Type]) -> Option<MethodHandle> {
         self.methods
             .iter()
             .find(|m| m.name == name)
-            .ok_or_else(|| JayError::NoSuchMethod(name.to_owned()))
+            .map(|method| MethodHandle {
+                method,
+                class: self,
+            })
+    }
+}
+
+struct MethodHandle<'a> {
+    method: &'a Method,
+    class: &'a Class,
+}
+impl MethodHandle<'_> {
+    fn invoke(&self, runtime: &Runtime) -> Result<(), JayError> {
+        trace!("Invoking method {}", self.method.name);
+        trace!("Constant pool: {:?}", self.class.constant_pool);
+
+        self.method.body.invoke(self, runtime)
     }
 }
 
 struct Method {
     name: String,
-    body: Option<Box<dyn MethodBody>>,
+    body: Box<dyn MethodBody>,
 }
-impl Method {
-    fn invoke(&self, runtime: &Runtime) {
-        if let Some(body) = &self.body {
-            body.invoke(runtime)
-        }
+
+struct Frame<'a> {
+    pc: usize,
+    class: &'a Class,
+    code_attribute: &'a CodeAttribute,
+}
+impl BytecodeStream for Frame<'_> {
+    fn readb(&mut self) -> u8 {
+        let b = self.code_attribute.code[self.pc];
+        self.pc += 1;
+        b
     }
 }
 
 trait MethodBody {
-    fn invoke(&self, runtime: &Runtime);
+    fn invoke(&self, method: &MethodHandle, runtime: &Runtime) -> Result<(), JayError>;
 }
-impl MethodBody for CodeAttribute {
-    fn invoke(&self, runtime: &Runtime) {
+
+struct NativeMethodBody;
+impl MethodBody for NativeMethodBody {
+    fn invoke(&self, _method: &MethodHandle, _runtime: &Runtime) -> Result<(), JayError> {
         todo!()
+    }
+}
+
+impl MethodBody for CodeAttribute {
+    fn invoke(&self, method: &MethodHandle, _runtime: &Runtime) -> Result<(), JayError> {
+        let mut frame = Frame {
+            pc: 0,
+            class: &method.class,
+            code_attribute: self,
+        };
+
+        loop {
+            let pc = frame.pc;
+            let bytecode = Bytecode::from_stream(&mut frame)?;
+            trace!("{:>4}: {}", pc, bytecode);
+
+            bytecode.handle();
+        }
+
+        Ok(())
     }
 }
 

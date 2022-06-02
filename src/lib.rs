@@ -1,3 +1,4 @@
+mod bytecode;
 mod class_file;
 pub mod class_path;
 mod error;

@@ -12,8 +12,8 @@ fn main() -> Result<(), JayError> {
     let path = env::var("JAVA_HOME")
         .map(|s| PathBuf::from(s).join("lib/modules"))
         .unwrap();
-    let file = File::open(path).unwrap();
-    let mmap = unsafe { Mmap::map(&file).unwrap() };
+    let file = File::open(path)?;
+    let mmap = unsafe { Mmap::map(&file)? };
 
     let jimage = jimage::Archive::parse(&mmap)?;
 
