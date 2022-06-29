@@ -172,6 +172,16 @@ impl CpInfo {
             ))),
         }
     }
+
+    pub(crate) fn to_field_ref(&self) -> Result<&RefInfo> {
+        match self {
+            Self::FieldRef(n) => Ok(n),
+            _ => Err(ClassFileError::UnexpectedConstantPoolEntry(format!(
+                "Expected FieldRef, found {:?}",
+                self,
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
