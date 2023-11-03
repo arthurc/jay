@@ -1,12 +1,12 @@
 use std::io;
 
-use crate::{bytecode, class_file, jimage};
+use crate::{bytecode, classfile::ClassFileError, jimage};
 
 #[derive(Debug)]
 pub enum JayError {
     NotFound(String),
     JImageError(jimage::JImageError),
-    ClassFileError(class_file::ClassFileError),
+    ClassFileError(ClassFileError),
     ClassLoadError(String),
     NoSuchMethod(String),
     BytecodeError(bytecode::BytecodeError),
@@ -25,8 +25,8 @@ impl From<jimage::JImageError> for JayError {
     }
 }
 
-impl From<class_file::ClassFileError> for JayError {
-    fn from(x: class_file::ClassFileError) -> Self {
+impl From<ClassFileError> for JayError {
+    fn from(x: ClassFileError) -> Self {
         JayError::ClassFileError(x)
     }
 }

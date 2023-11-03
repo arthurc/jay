@@ -3,6 +3,9 @@ name = "jay"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = ["crates/*"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -11,3 +14,5 @@ pretty_env_logger = "0.4"
 byteorder = "1"
 memmap = "0.7"
 bitflags = "1"
+jay-classfile = { path = "crates/classfile" }
+jay-jimage = { path = "crates/jimage" }

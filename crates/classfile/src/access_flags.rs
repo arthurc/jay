@@ -1,4 +1,5 @@
 bitflags::bitflags! {
+  #[derive(Debug)]
   pub struct AccessFlags: u16 {
     const PUBLIC = 0x0001;
     const PRIVATE = 0x0002;

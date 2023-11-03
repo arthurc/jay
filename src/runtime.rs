@@ -5,8 +5,8 @@ use log::trace;
 
 use crate::{
     bytecode::{Bytecode, BytecodeStream},
-    class_file::{constant_pool, AccessFlags, ClassFile, CodeAttribute, MethodInfo},
     class_path::ClassPath,
+    classfile::{constant_pool, AccessFlags, ClassFile, CodeAttribute, MethodInfo},
     JayError,
 };
 
@@ -101,7 +101,7 @@ impl<'a> Runtime<'a> {
 
         let classes = self.classes.borrow();
         if let Some(clinit) = classes[class_id].find_method("<clinit>", &[]) {
-            clinit.invoke(self);
+            clinit.invoke(self)?;
         }
 
         Ok(class_id)

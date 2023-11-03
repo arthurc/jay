@@ -1,6 +1,6 @@
 mod access_flags;
 mod attributes;
-pub(crate) mod constant_pool;
+pub mod constant_pool;
 mod error;
 mod parser;
 
@@ -50,14 +50,14 @@ pub struct MethodInfo {
 mod tests {
     use std::io::Cursor;
 
-    use crate::class_file::constant_pool::CpInfo;
+    use crate::constant_pool::CpInfo;
 
     use super::*;
 
     #[test]
     fn test_parse_cp_info_utf8() {
         let class_file = ClassFile::parse(Cursor::new(include_bytes!(
-            "../../classes/com/example/Main.class"
+            "../../../classes/com/example/Main.class"
         )))
         .unwrap();
 
