@@ -1,10 +1,7 @@
+use super::*;
+use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{BufReader, Read, Seek};
 
-use byteorder::{BigEndian, ReadBytesExt};
-
-use super::{constant::Constant, *};
-
-type Result<T, E = ClassFileError> = std::result::Result<T, E>;
 type Endian = BigEndian;
 
 pub(crate) struct Parser<R> {
@@ -88,7 +85,7 @@ impl<R: Read + Seek> Parser<R> {
     fn parse_magic_identifier(&mut self) -> Result<()> {
         match self.read_u32()? {
             0xCAFEBABE => Ok(()),
-            magic_identifier => Err(ClassFileError::ReadError(
+            magic_identifier => Err(Error::ReadError(
                 format!("Invalid magic identifier: 0x{magic_identifier:X}"),
                 self.r.stream_position()? as usize,
             )),
@@ -105,7 +102,8 @@ impl<R: Read + Seek> Parser<R> {
         let constant_pool_count = self.read_u16()?;
 
         let mut count = constant_pool_count as usize - 1;
-        let mut res = Vec::with_capacity(count);
+        let mut res = Vec::with_capacity(count + 1);
+        res.push(Constant::Unusable);
         while count > 0 {
             let (cp_info, slot_size) = self.parse_cp_info()?;
             res.push(cp_info);
@@ -132,7 +130,7 @@ impl<R: Read + Seek> Parser<R> {
             16 => (self.parse_method_type_info()?, 1),
             18 => (self.parse_invoke_dynamic_info()?, 1),
             _ => {
-                return Err(ClassFileError::ReadError(
+                return Err(Error::ReadError(
                     format!("Invalid cp info tag: {tag}"),
                     self.r.stream_position()? as usize - 1,
                 ))
@@ -297,7 +295,7 @@ impl<R: Read + Seek> Parser<R> {
             .into_iter()
             .map(|_| self.parse_attribute())
             .collect::<Result<Vec<_>>>()
-            .map(Attributes)
+            .map(Attributes::new)
     }
 
     fn read_u32(&mut self) -> Result<u32> {

@@ -1,6 +1,4 @@
-use std::{fmt, io::Cursor};
-
-use super::{parser::Parser, ConstantPool};
+use std::fmt;
 
 pub struct Attribute {
     pub attribute_name_index: u16,
@@ -16,22 +14,14 @@ impl fmt::Debug for Attribute {
 }
 
 #[derive(Debug)]
-pub struct Attributes(pub Vec<Attribute>);
+pub struct Attributes(Vec<Attribute>);
 impl Attributes {
-    pub fn find_by_name(&self, name: &str, constant_pool: &ConstantPool) -> Option<&Attribute> {
-        self.0.iter().find(
-            |Attribute {
-                 attribute_name_index,
-                 ..
-             }| matches!(constant_pool[*attribute_name_index].to_utf8(), Ok(name)),
-        )
+    pub fn new(attributes: Vec<Attribute>) -> Self {
+        Self(attributes)
     }
 
-    pub fn code_attribute(&self, constant_pool: &ConstantPool) -> Option<CodeAttribute> {
-        let attribute = self.find_by_name("Code", constant_pool)?;
-        Parser::new(Cursor::new(&attribute.info))
-            .parse_code_attribute()
-            .ok()
+    pub fn iter(&self) -> impl Iterator<Item = &Attribute> {
+        self.0.iter()
     }
 }
 

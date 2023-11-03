@@ -1,11 +1,11 @@
 #[derive(Debug)]
-pub enum JImageError {
-    ReadError(String, usize),
-    IOError(std::io::Error),
+pub enum Error {
+    Read(String, usize),
+    IO(std::io::Error),
 }
 
-impl From<std::io::Error> for JImageError {
+impl From<std::io::Error> for Error {
     fn from(x: std::io::Error) -> Self {
-        Self::IOError(x)
+        Self::IO(x)
     }
 }

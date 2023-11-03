@@ -2,11 +2,11 @@ use std::{env, fs::File, path::PathBuf};
 
 use jay::{
     class_path::{ClassPath, DirClassPath},
-    jimage, JayError, Runtime,
+    jimage, Result, Runtime,
 };
 use memmap::Mmap;
 
-fn main() -> Result<(), JayError> {
+fn main() -> Result<()> {
     pretty_env_logger::init();
 
     let path = env::var("JAVA_HOME")

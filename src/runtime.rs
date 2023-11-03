@@ -5,8 +5,8 @@ use log::trace;
 use crate::{
     bytecode::{Bytecode, BytecodeStream},
     class_path::ClassPath,
-    classfile::{constant, AccessFlags, ClassFile, CodeAttribute, ConstantPool, MethodInfo},
-    JayError,
+    classfile::{AccessFlags, ClassFile, CodeAttribute, ConstantPool},
+    Error, Result,
 };
 
 pub struct Runtime<'a> {
@@ -22,78 +22,52 @@ impl<'a> Runtime<'a> {
         }
     }
 
-    pub fn run_with_main(&self, main_class_name: &str) -> Result<(), JayError> {
+    pub fn run_with_main(&self, main_class_name: &str) -> Result<()> {
         let class_id = self.load_class(main_class_name)?;
 
         let classes = self.classes.borrow();
         let main = classes[class_id]
             .find_method("main", &[])
-            .ok_or_else(|| JayError::NoSuchMethod("main".to_owned()))?;
+            .ok_or_else(|| Error::NoSuchMethod("main".to_owned()))?;
 
         main.invoke(self)?;
 
         Ok(())
     }
 
-    fn load_class(&self, class_name: &str) -> Result<ClassId, JayError> {
+    fn load_class(&self, class_name: &str) -> Result<ClassId> {
         trace!("Loading class. name={}", class_name);
 
         let resource_name = class_name.replace(".", "/") + ".class";
         let bytes = self
             .class_path
             .find_resource(&resource_name)
-            .ok_or_else(|| JayError::NotFound(String::from(resource_name)))?;
+            .ok_or_else(|| Error::NotFound(resource_name.into()))?;
         let class_file = ClassFile::parse(bytes)?;
 
-        let constant::ClassInfo { name_index } =
-            class_file.constant_pool[class_file.this_class].to_class_info()?;
-
-        let name = class_file.constant_pool[*name_index].to_utf8()?.to_string();
-
-        let super_class = if class_file.super_class != 0 {
-            let super_class = class_file.constant_pool[class_file.super_class].to_class_info()?;
-            let super_class = class_file.constant_pool[super_class.name_index].to_utf8()?;
-            Some(self.load_class(super_class)?)
-        } else {
-            None
-        };
+        let name = class_file.class_name()?;
+        let super_class = class_file.super_class_name()?;
 
         let methods = class_file
-            .methods
-            .iter()
-            .map(
-                |MethodInfo {
-                     name_index,
-                     attributes,
-                     access_flags,
-                     ..
-                 }| {
-                    let name = class_file.constant_pool[*name_index].to_utf8()?;
-                    let code_attribute = attributes.code_attribute(&class_file.constant_pool);
-                    let body = code_attribute
-                        .map(|code_attribute| -> Box<dyn MethodBody> { Box::new(code_attribute) })
-                        .or_else(|| {
-                            if access_flags.contains(AccessFlags::NATIVE) {
-                                Some(Box::new(NativeMethodBody))
-                            } else {
-                                None
-                            }
-                        })
-                        .ok_or_else(|| {
-                            JayError::ClassLoadError(format!("No method body found for {}", name))
-                        })?;
+            .methods()
+            .map(|m| {
+                let name = m.name()?;
+                let body = if m.access_flags().contains(AccessFlags::NATIVE) {
+                    MethodBody::Native
+                } else {
+                    MethodBody::Code(m.attributes().code()?.expect("Expecting code method body"))
+                };
 
-                    Ok(Method {
-                        name: name.to_owned(),
-                        body,
-                    })
-                },
-            )
-            .collect::<Result<_, JayError>>()?;
+                Ok(Method {
+                    name: name.to_owned(),
+                    body,
+                })
+            })
+            .collect::<Result<_, Error>>()?;
 
         let class_id = self.add_class(Class {
-            name,
-            super_class,
+            name: name.to_string(),
+            super_class: None, // TODO
             constant_pool: class_file.constant_pool,
             methods,
         })?;
@@ -106,7 +80,7 @@ impl<'a> Runtime<'a> {
         Ok(class_id)
     }
 
-    fn add_class(&self, class: Class) -> Result<ClassId, JayError> {
+    fn add_class(&self, class: Class) -> Result<ClassId> {
         self.classes.borrow_mut().push(class);
 
         Ok(self.classes.borrow().len() - 1)
@@ -138,7 +112,7 @@ struct MethodHandle<'a> {
     class: &'a Class,
 }
 impl MethodHandle<'_> {
-    fn invoke(&self, runtime: &Runtime) -> Result<(), JayError> {
+    fn invoke(&self, runtime: &Runtime) -> Result<()> {
         trace!("Invoking method {}", self.method.name);
         trace!("Constant pool: {:?}", self.class.constant_pool);
 
@@ -148,7 +122,7 @@ impl MethodHandle<'_> {
 
 struct Method {
     name: String,
-    body: Box<dyn MethodBody>,
+    body: MethodBody,
 }
 
 struct Frame<'a> {
@@ -164,34 +138,30 @@ impl BytecodeStream for Frame<'_> {
     }
 }
 
-trait MethodBody {
-    fn invoke(&self, method: &MethodHandle, runtime: &Runtime) -> Result<(), JayError>;
+enum MethodBody {
+    Native,
+    Code(CodeAttribute),
 }
+impl MethodBody {
+    pub fn invoke(&self, method: &MethodHandle, _runtime: &Runtime) -> Result<()> {
+        match self {
+            Self::Native => todo!(),
+            Self::Code(code_attribute) => {
+                let mut frame = Frame {
+                    pc: 0,
+                    class: &method.class,
+                    code_attribute,
+                };
 
-struct NativeMethodBody;
-impl MethodBody for NativeMethodBody {
-    fn invoke(&self, _method: &MethodHandle, _runtime: &Runtime) -> Result<(), JayError> {
-        todo!()
-    }
-}
+                loop {
+                    let pc = frame.pc;
+                    let bytecode = Bytecode::from_stream(&mut frame)?;
+                    trace!("{:>4}: {}", pc, bytecode);
 
-impl MethodBody for CodeAttribute {
-    fn invoke(&self, method: &MethodHandle, _runtime: &Runtime) -> Result<(), JayError> {
-        let mut frame = Frame {
-            pc: 0,
-            class: &method.class,
-            code_attribute: self,
-        };
-
-        loop {
-            let pc = frame.pc;
-            let bytecode = Bytecode::from_stream(&mut frame)?;
-            trace!("{:>4}: {}", pc, bytecode);
-
-            bytecode.handle();
+                    bytecode.handle();
+                }
+            }
         }
-
-        Ok(())
     }
 }
 

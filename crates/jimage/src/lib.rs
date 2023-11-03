@@ -7,9 +7,10 @@ use std::{convert::TryFrom, fmt::Debug};
 
 use byteorder::NativeEndian;
 
+pub use error::*;
 use parser::Parser;
 
-pub use error::JImageError;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 const HASH_MULTIPLIER: i32 = 0x01000193;
 
@@ -103,7 +104,7 @@ pub struct Archive<'a> {
     resource_data_start: usize,
 }
 impl<'a> Archive<'a> {
-    pub fn parse(buf: &'a [u8]) -> Result<Self, JImageError> {
+    pub fn parse(buf: &'a [u8]) -> Result<Self, Error> {
         Parser::<NativeEndian>::new(buf).parse_archive()
     }
 

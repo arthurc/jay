@@ -20,7 +20,7 @@ impl<'a, E: ByteOrder> Parser<'a, E> {
         }
     }
 
-    pub(crate) fn parse_archive(mut self) -> Result<Archive<'a>, JImageError> {
+    pub(crate) fn parse_archive(mut self) -> Result<Archive<'a>> {
         let header = self.parse_header()?;
         let index = self.parse_index(&header)?;
         let resource_data_start = self.r.position() as usize;
@@ -33,7 +33,7 @@ impl<'a, E: ByteOrder> Parser<'a, E> {
         })
     }
 
-    fn parse_header(&mut self) -> Result<Header, JImageError> {
+    fn parse_header(&mut self) -> Result<Header> {
         let _ = self.parse_magic_identifier()?;
         let version = self.parse_version()?;
         let flags = self.read_u32()?;
@@ -52,7 +52,7 @@ impl<'a, E: ByteOrder> Parser<'a, E> {
         })
     }
 
-    fn parse_index(&mut self, header: &Header) -> Result<Index, JImageError> {
+    fn parse_index(&mut self, header: &Header) -> Result<Index> {
         let mut redirect_table = vec![0i32; header.table_length as usize];
         self.r.read_i32_into::<E>(&mut redirect_table)?;
 
@@ -73,9 +73,7 @@ impl<'a, E: ByteOrder> Parser<'a, E> {
         })
     }
 
-    pub(crate) fn parse_attributes(
-        &mut self,
-    ) -> Result<[u64; AttributeKind::Total as usize], JImageError> {
+    pub(crate) fn parse_attributes(&mut self) -> Result<[u64; AttributeKind::Total as usize]> {
         let mut attributes = [0; AttributeKind::Total as usize];
         while let Some((kind, value)) = self.parse_attribute()? {
             attributes[kind as usize] = value;
@@ -84,7 +82,7 @@ impl<'a, E: ByteOrder> Parser<'a, E> {
         Ok(attributes)
     }
 
-    fn parse_attribute(&mut self) -> Result<Option<(AttributeKind, u64)>, JImageError> {
+    fn parse_attribute(&mut self) -> Result<Option<(AttributeKind, u64)>> {
         let header_byte = self.read_u8()?;
         let kind = header_byte >> 3;
         let length = header_byte as usize & 0x7;
@@ -94,7 +92,7 @@ impl<'a, E: ByteOrder> Parser<'a, E> {
         }
 
         let kind = AttributeKind::try_from(kind).map_err(|e| {
-            JImageError::ReadError(
+            Error::Read(
                 format!("Invalid attribute kind: {:?}", e),
                 self.r.position() as usize - 1,
             )
@@ -107,31 +105,31 @@ impl<'a, E: ByteOrder> Parser<'a, E> {
         Ok(Some((kind, value)))
     }
 
-    fn parse_magic_identifier(&mut self) -> Result<(), JImageError> {
+    fn parse_magic_identifier(&mut self) -> Result<()> {
         match self.read_u32()? {
             0xCAFEDADA => Ok(()),
-            magic_identifier => Err(JImageError::ReadError(
+            magic_identifier => Err(Error::Read(
                 format!("Invalid magic identifier: {magic_identifier:X}",),
                 self.r.position() as usize,
             )),
         }
     }
 
-    fn parse_version(&mut self) -> Result<(u16, u16), JImageError> {
+    fn parse_version(&mut self) -> Result<(u16, u16)> {
         let minor = self.read_u16()?;
         let major = self.read_u16()?;
         Ok((major, minor))
     }
 
-    fn read_u32(&mut self) -> Result<u32, JImageError> {
+    fn read_u32(&mut self) -> Result<u32> {
         Ok(self.r.read_u32::<E>()?)
     }
 
-    fn read_u16(&mut self) -> Result<u16, JImageError> {
+    fn read_u16(&mut self) -> Result<u16> {
         Ok(self.r.read_u16::<E>()?)
     }
 
-    fn read_u8(&mut self) -> Result<u8, JImageError> {
+    fn read_u8(&mut self) -> Result<u8> {
         Ok(self.r.read_u8()?)
     }
 }
