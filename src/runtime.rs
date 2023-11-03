@@ -1,12 +1,11 @@
 use std::cell::RefCell;
 
-use constant_pool::ConstantPool;
 use log::trace;
 
 use crate::{
     bytecode::{Bytecode, BytecodeStream},
     class_path::ClassPath,
-    classfile::{constant_pool, AccessFlags, ClassFile, CodeAttribute, MethodInfo},
+    classfile::{constant, AccessFlags, ClassFile, CodeAttribute, ConstantPool, MethodInfo},
     JayError,
 };
 
@@ -46,7 +45,7 @@ impl<'a> Runtime<'a> {
             .ok_or_else(|| JayError::NotFound(String::from(resource_name)))?;
         let class_file = ClassFile::parse(bytes)?;
 
-        let constant_pool::ClassInfo { name_index } =
+        let constant::ClassInfo { name_index } =
             class_file.constant_pool[class_file.this_class].to_class_info()?;
 
         let name = class_file.constant_pool[*name_index].to_utf8()?.to_string();

@@ -2,132 +2,8 @@ use std::{fmt, ops::Index};
 
 use super::*;
 
-#[derive(Default)]
-pub struct ConstantPool {
-    cp_infos: Vec<CpInfo>,
-}
-impl ConstantPool {
-    pub fn new(cp_infos: Vec<CpInfo>) -> Self {
-        Self { cp_infos }
-    }
-
-    pub fn contains(&self, cp_info: &CpInfo) -> bool {
-        self.cp_infos.contains(cp_info)
-    }
-
-    fn fmt_class_info(&self, ClassInfo { name_index }: &ClassInfo) -> String {
-        format!(
-            "{{ name_index: {} ({:?}) }}",
-            name_index,
-            self.cp_infos[*name_index as usize - 1]
-                .to_utf8()
-                .unwrap_or("???")
-        )
-    }
-
-    fn fmt_name_and_type_index(
-        &self,
-        NameAndTypeInfo {
-            name_index,
-            descriptor_index,
-        }: &NameAndTypeInfo,
-    ) -> String {
-        format!(
-            "{{ name_index: {} ({:?}), descriptor_index: {} ({:?}) }}",
-            name_index,
-            self.cp_infos[*name_index as usize - 1]
-                .to_utf8()
-                .unwrap_or("???"),
-            descriptor_index,
-            self.cp_infos[*descriptor_index as usize - 1]
-                .to_utf8()
-                .unwrap_or("???")
-        )
-    }
-
-    fn fmt_ref_info(
-        &self,
-        RefInfo {
-            class_index,
-            name_and_type_index,
-        }: &RefInfo,
-    ) -> String {
-        format!(
-            "{{ class_index: {} ({}), name_and_type_index: {} ({}) }}",
-            class_index,
-            self.cp_infos[*class_index as usize - 1]
-                .to_class_info()
-                .map(|i| self.fmt_class_info(i))
-                .unwrap_or_else(|_| String::from("???")),
-            name_and_type_index,
-            self.cp_infos[*name_and_type_index as usize - 1]
-                .to_name_and_type()
-                .map(|nt| self.fmt_name_and_type_index(nt))
-                .unwrap_or_else(|_| String::from("???"))
-        )
-    }
-}
-impl Index<u16> for ConstantPool {
-    type Output = CpInfo;
-
-    fn index(&self, index: u16) -> &Self::Output {
-        &self.cp_infos[index as usize - 1]
-    }
-}
-impl<'a> IntoIterator for &'a ConstantPool {
-    type Item = &'a CpInfo;
-    type IntoIter = std::slice::Iter<'a, CpInfo>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.cp_infos.iter()
-    }
-}
-impl fmt::Debug for ConstantPool {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "[")?;
-        for (index, i) in self.cp_infos.iter().enumerate() {
-            write!(f, "    {}. ", index + 1)?;
-            match i {
-                CpInfo::Class(ClassInfo { name_index }) => writeln!(
-                    f,
-                    "Class {{ name_index: {} ({:?}) }}",
-                    name_index,
-                    self.cp_infos[*name_index as usize - 1]
-                        .to_utf8()
-                        .unwrap_or("???")
-                )?,
-                CpInfo::FieldRef(ref_info) => {
-                    writeln!(f, "FieldRef {}", self.fmt_ref_info(ref_info))?
-                }
-                CpInfo::MethodRef(ref_info) => {
-                    writeln!(f, "MethodRef {}", self.fmt_ref_info(ref_info))?
-                }
-                CpInfo::NameAndType(name_and_type) => writeln!(
-                    f,
-                    "NameAndType {}",
-                    self.fmt_name_and_type_index(name_and_type),
-                )?,
-                CpInfo::Utf8(s) => writeln!(f, "Utf8: {:?}", s)?,
-                CpInfo::Long(l) => writeln!(f, "Long: {}", l)?,
-                CpInfo::String { string_index } => writeln!(
-                    f,
-                    "String: {{ string_index: {} ({:?}) }}",
-                    string_index,
-                    self.cp_infos[*string_index as usize - 1]
-                        .to_utf8()
-                        .unwrap_or("???")
-                )?,
-                _ => writeln!(f, "???")?,
-            }
-        }
-        write!(f, "]")?;
-
-        Ok(())
-    }
-}
-
 #[derive(Debug, PartialEq)]
-pub enum CpInfo {
+pub enum Constant {
     MethodRef(RefInfo),
     FieldRef(RefInfo),
     InterfaceMethodRef(RefInfo),
@@ -142,7 +18,7 @@ pub enum CpInfo {
     Long(i64),
     Unusable,
 }
-impl CpInfo {
+impl Constant {
     pub fn to_utf8(&self) -> Result<&str> {
         match self {
             Self::Utf8(s) => Ok(s),
@@ -181,6 +57,130 @@ impl CpInfo {
                 self,
             ))),
         }
+    }
+}
+
+#[derive(Default)]
+pub struct ConstantPool {
+    constants: Vec<Constant>,
+}
+impl ConstantPool {
+    pub fn new(constants: Vec<Constant>) -> Self {
+        Self { constants }
+    }
+
+    pub fn contains(&self, cp_info: &Constant) -> bool {
+        self.constants.contains(cp_info)
+    }
+
+    fn fmt_class_info(&self, ClassInfo { name_index }: &ClassInfo) -> String {
+        format!(
+            "{{ name_index: {} ({:?}) }}",
+            name_index,
+            self.constants[*name_index as usize - 1]
+                .to_utf8()
+                .unwrap_or("???")
+        )
+    }
+
+    fn fmt_name_and_type_index(
+        &self,
+        NameAndTypeInfo {
+            name_index,
+            descriptor_index,
+        }: &NameAndTypeInfo,
+    ) -> String {
+        format!(
+            "{{ name_index: {} ({:?}), descriptor_index: {} ({:?}) }}",
+            name_index,
+            self.constants[*name_index as usize - 1]
+                .to_utf8()
+                .unwrap_or("???"),
+            descriptor_index,
+            self.constants[*descriptor_index as usize - 1]
+                .to_utf8()
+                .unwrap_or("???")
+        )
+    }
+
+    fn fmt_ref_info(
+        &self,
+        RefInfo {
+            class_index,
+            name_and_type_index,
+        }: &RefInfo,
+    ) -> String {
+        format!(
+            "{{ class_index: {} ({}), name_and_type_index: {} ({}) }}",
+            class_index,
+            self.constants[*class_index as usize - 1]
+                .to_class_info()
+                .map(|i| self.fmt_class_info(i))
+                .unwrap_or_else(|_| String::from("???")),
+            name_and_type_index,
+            self.constants[*name_and_type_index as usize - 1]
+                .to_name_and_type()
+                .map(|nt| self.fmt_name_and_type_index(nt))
+                .unwrap_or_else(|_| String::from("???"))
+        )
+    }
+}
+impl Index<u16> for ConstantPool {
+    type Output = Constant;
+
+    fn index(&self, index: u16) -> &Self::Output {
+        &self.constants[index as usize - 1]
+    }
+}
+impl<'a> IntoIterator for &'a ConstantPool {
+    type Item = &'a Constant;
+    type IntoIter = std::slice::Iter<'a, Constant>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.constants.iter()
+    }
+}
+impl fmt::Debug for ConstantPool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "[")?;
+        for (index, i) in self.constants.iter().enumerate() {
+            write!(f, "    {}. ", index + 1)?;
+            match i {
+                Constant::Class(ClassInfo { name_index }) => writeln!(
+                    f,
+                    "Class {{ name_index: {} ({:?}) }}",
+                    name_index,
+                    self.constants[*name_index as usize - 1]
+                        .to_utf8()
+                        .unwrap_or("???")
+                )?,
+                Constant::FieldRef(ref_info) => {
+                    writeln!(f, "FieldRef {}", self.fmt_ref_info(ref_info))?
+                }
+                Constant::MethodRef(ref_info) => {
+                    writeln!(f, "MethodRef {}", self.fmt_ref_info(ref_info))?
+                }
+                Constant::NameAndType(name_and_type) => writeln!(
+                    f,
+                    "NameAndType {}",
+                    self.fmt_name_and_type_index(name_and_type),
+                )?,
+                Constant::Utf8(s) => writeln!(f, "Utf8: {:?}", s)?,
+                Constant::Long(l) => writeln!(f, "Long: {}", l)?,
+                Constant::String { string_index } => writeln!(
+                    f,
+                    "String: {{ string_index: {} ({:?}) }}",
+                    string_index,
+                    self.constants[*string_index as usize - 1]
+                        .to_utf8()
+                        .unwrap_or("???")
+                )?,
+                _ => writeln!(f, "???")?,
+            }
+        }
+        write!(f, "]")?;
+
+        Ok(())
     }
 }
 

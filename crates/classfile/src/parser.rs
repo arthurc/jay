@@ -2,7 +2,7 @@ use std::io::{BufReader, Read, Seek};
 
 use byteorder::{BigEndian, ReadBytesExt};
 
-use super::{constant_pool::CpInfo, *};
+use super::{constant::Constant, *};
 
 type Result<T, E = ClassFileError> = std::result::Result<T, E>;
 type Endian = BigEndian;
@@ -109,14 +109,14 @@ impl<R: Read + Seek> Parser<R> {
         while count > 0 {
             let (cp_info, slot_size) = self.parse_cp_info()?;
             res.push(cp_info);
-            (0..slot_size - 1).for_each(|_| res.push(CpInfo::Unusable));
+            (0..slot_size - 1).for_each(|_| res.push(Constant::Unusable));
 
             count -= slot_size;
         }
         Ok(ConstantPool::new(res))
     }
 
-    fn parse_cp_info(&mut self) -> Result<(CpInfo, usize)> {
+    fn parse_cp_info(&mut self) -> Result<(Constant, usize)> {
         let tag = self.read_u8()?;
         let (cp_info, additional_cp_info) = match tag {
             1 => (self.parse_utf8()?, 1),
@@ -142,100 +142,102 @@ impl<R: Read + Seek> Parser<R> {
         Ok((cp_info, additional_cp_info))
     }
 
-    fn parse_utf8(&mut self) -> Result<CpInfo> {
+    fn parse_utf8(&mut self) -> Result<Constant> {
         let length = self.read_u16()?;
         let mut bytes = vec![0u8; length as usize];
         self.r.read_exact(&mut bytes)?;
 
-        Ok(CpInfo::Utf8(String::from_utf8_lossy(&bytes).into()))
+        Ok(Constant::Utf8(String::from_utf8_lossy(&bytes).into()))
     }
 
-    fn parse_integer(&mut self) -> Result<CpInfo> {
+    fn parse_integer(&mut self) -> Result<Constant> {
         let int = self.read_i32()?;
 
-        Ok(CpInfo::Integer(int))
+        Ok(Constant::Integer(int))
     }
 
-    fn parse_long(&mut self) -> Result<CpInfo> {
+    fn parse_long(&mut self) -> Result<Constant> {
         let high_bytes = self.read_u32()?;
         let low_bytes = self.read_u32()?;
 
-        Ok(CpInfo::Long(((high_bytes as i64) << 32) + low_bytes as i64))
+        Ok(Constant::Long(
+            ((high_bytes as i64) << 32) + low_bytes as i64,
+        ))
     }
 
-    fn parse_class_info(&mut self) -> Result<CpInfo> {
+    fn parse_class_info(&mut self) -> Result<Constant> {
         let name_index = self.read_u16()?;
 
-        Ok(CpInfo::Class(constant_pool::ClassInfo { name_index }))
+        Ok(Constant::Class(constant::ClassInfo { name_index }))
     }
 
-    fn parse_string(&mut self) -> Result<CpInfo> {
+    fn parse_string(&mut self) -> Result<Constant> {
         let string_index = self.read_u16()?;
 
-        Ok(CpInfo::String { string_index })
+        Ok(Constant::String { string_index })
     }
 
-    fn parse_field_ref(&mut self) -> Result<CpInfo> {
+    fn parse_field_ref(&mut self) -> Result<Constant> {
         let ref_info = self.parse_ref_info()?;
 
-        Ok(CpInfo::FieldRef(ref_info))
+        Ok(Constant::FieldRef(ref_info))
     }
 
-    fn parse_method_ref(&mut self) -> Result<CpInfo> {
+    fn parse_method_ref(&mut self) -> Result<Constant> {
         let ref_info = self.parse_ref_info()?;
 
-        Ok(CpInfo::MethodRef(ref_info))
+        Ok(Constant::MethodRef(ref_info))
     }
 
-    fn parse_interface_method_ref(&mut self) -> Result<CpInfo> {
+    fn parse_interface_method_ref(&mut self) -> Result<Constant> {
         let ref_info = self.parse_ref_info()?;
 
-        Ok(CpInfo::InterfaceMethodRef(ref_info))
+        Ok(Constant::InterfaceMethodRef(ref_info))
     }
 
-    fn parse_name_and_type_info(&mut self) -> Result<CpInfo> {
+    fn parse_name_and_type_info(&mut self) -> Result<Constant> {
         let name_index = self.read_u16()?;
         let descriptor_index = self.read_u16()?;
 
-        Ok(CpInfo::NameAndType(constant_pool::NameAndTypeInfo {
+        Ok(Constant::NameAndType(constant::NameAndTypeInfo {
             name_index,
             descriptor_index,
         }))
     }
 
-    fn parse_method_handle(&mut self) -> Result<CpInfo> {
+    fn parse_method_handle(&mut self) -> Result<Constant> {
         let reference_kind = self.read_u8()?;
         let reference_index = self.read_u16()?;
 
-        Ok(CpInfo::MethodHandle(constant_pool::MethodHandleInfo {
+        Ok(Constant::MethodHandle(constant::MethodHandleInfo {
             reference_kind,
             reference_index,
         }))
     }
 
-    fn parse_method_type_info(&mut self) -> Result<CpInfo> {
+    fn parse_method_type_info(&mut self) -> Result<Constant> {
         let descriptor_index = self.read_u16()?;
 
-        Ok(CpInfo::MethodType(constant_pool::MethodTypeInfo {
+        Ok(Constant::MethodType(constant::MethodTypeInfo {
             descriptor_index,
         }))
     }
 
-    fn parse_invoke_dynamic_info(&mut self) -> Result<CpInfo> {
+    fn parse_invoke_dynamic_info(&mut self) -> Result<Constant> {
         let bootstrap_method_attr_index = self.read_u16()?;
         let name_and_type_index = self.read_u16()?;
 
-        Ok(CpInfo::InvokeDynamic(constant_pool::InvokeDynamicInfo {
+        Ok(Constant::InvokeDynamic(constant::InvokeDynamicInfo {
             bootstrap_method_attr_index,
             name_and_type_index,
         }))
     }
 
-    fn parse_ref_info(&mut self) -> Result<constant_pool::RefInfo> {
+    fn parse_ref_info(&mut self) -> Result<constant::RefInfo> {
         let class_index = self.read_u16()?;
         let name_and_type_index = self.read_u16()?;
 
-        Ok(constant_pool::RefInfo {
+        Ok(constant::RefInfo {
             class_index,
             name_and_type_index,
         })

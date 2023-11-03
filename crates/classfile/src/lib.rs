@@ -1,6 +1,6 @@
 mod access_flags;
 mod attributes;
-pub mod constant_pool;
+pub mod constant;
 mod error;
 mod parser;
 
@@ -8,7 +8,7 @@ use std::io::{Read, Seek};
 
 pub use access_flags::*;
 pub use attributes::*;
-pub use constant_pool::ConstantPool;
+pub use constant::ConstantPool;
 pub use error::ClassFileError;
 
 type Result<T, E = ClassFileError> = std::result::Result<T, E>;
@@ -50,7 +50,7 @@ pub struct MethodInfo {
 mod tests {
     use std::io::Cursor;
 
-    use crate::constant_pool::CpInfo;
+    use crate::constant::Constant;
 
     use super::*;
 
@@ -63,12 +63,12 @@ mod tests {
 
         assert!(class_file
             .constant_pool
-            .contains(&CpInfo::Utf8(String::from("<init>"))));
+            .contains(&Constant::Utf8(String::from("<init>"))));
         assert!(class_file
             .constant_pool
-            .contains(&CpInfo::Utf8(String::from("main"))));
+            .contains(&Constant::Utf8(String::from("main"))));
         assert!(class_file
             .constant_pool
-            .contains(&CpInfo::Utf8(String::from("Code"))));
+            .contains(&Constant::Utf8(String::from("Code"))));
     }
 }
