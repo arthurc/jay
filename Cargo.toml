@@ -16,3 +16,4 @@ memmap = "0.7"
 bitflags = "1"
 jay-classfile = { path = "crates/classfile" }
 jay-jimage = { path = "crates/jimage" }
+jay-bytecode = { path = "crates/bytecode" }

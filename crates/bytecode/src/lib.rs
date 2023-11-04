@@ -5,10 +5,12 @@ mod error;
 mod table;
 
 use bytecodes::*;
-pub use error::BytecodeError;
+pub use error::*;
 use table::{Descriptor, Format};
 
 use Format::*;
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 const BYTECODE_LOOKUP_TABLE: [Option<Descriptor>; table::SIZE] = table::Builder::new()
     .build(0x01, "aconst_null", NoIndex(aconst_null))
@@ -44,11 +46,11 @@ pub struct Bytecode {
     index: Option<Index>,
 }
 impl Bytecode {
-    pub fn from_stream(stream: &mut dyn BytecodeStream) -> Result<Bytecode, BytecodeError> {
+    pub fn from_stream(stream: &mut dyn BytecodeStream) -> Result<Bytecode> {
         let opcode = stream.readb();
         let descriptor = BYTECODE_LOOKUP_TABLE[opcode as usize]
             .as_ref()
-            .ok_or_else(|| BytecodeError::UnknownBytecode(opcode))?;
+            .ok_or_else(|| Error::UnknownBytecode(opcode))?;
         let index = match descriptor.format {
             Format::NoIndex(_) => None,
             Format::Index(_) => Some(Index::Byte(stream.readb())),

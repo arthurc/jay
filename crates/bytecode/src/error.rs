@@ -1,4 +1,4 @@
 #[derive(Debug)]
-pub enum BytecodeError {
+pub enum Error {
     UnknownBytecode(u8),
 }

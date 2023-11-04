@@ -9,7 +9,7 @@ pub enum Error {
     ClassFile(classfile::Error),
     ClassLoadError(String),
     NoSuchMethod(String),
-    BytecodeError(bytecode::BytecodeError),
+    Bytecode(bytecode::Error),
     IOError(io::Error),
 }
 
@@ -31,8 +31,8 @@ impl From<classfile::Error> for Error {
     }
 }
 
-impl From<bytecode::BytecodeError> for Error {
-    fn from(x: bytecode::BytecodeError) -> Self {
-        Error::BytecodeError(x)
+impl From<bytecode::Error> for Error {
+    fn from(x: bytecode::Error) -> Self {
+        Error::Bytecode(x)
     }
 }
