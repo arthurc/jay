@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 bitflags = "2"
 byteorder = "1"
+thiserror = "1"

@@ -1,22 +1,22 @@
 use std::{cell::RefCell, io};
 
-use jay_bytecode::BytecodeStream;
 use log::trace;
 
 use crate::{
+    bytecode::BytecodeStream,
     class_path::ClassPath,
     classfile::{AccessFlags, ClassFile, CodeAttribute, ConstantPool},
     Error, Result,
 };
 
 pub struct Runtime<'a> {
-    class_path: Box<dyn ClassPath + 'a>,
+    class_path: ClassPath<'a>,
     classes: RefCell<Vec<Class>>,
 }
 
-impl<'a> Runtime<'a> {
-    pub fn new(class_path: Box<dyn ClassPath + 'a>) -> Self {
-        Self {
+impl Runtime<'_> {
+    pub fn new(class_path: ClassPath) -> Runtime {
+        Runtime {
             class_path,
             classes: RefCell::new(Vec::new()),
         }
