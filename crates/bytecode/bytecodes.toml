@@ -1,0 +1,6 @@
+aconst_null     = { opcode = 0x01, format = "byte" }
+aload           = { opcode = 0x19 }
+getstatic       = { opcode = 0xb2, format = "wide" }
+ldc             = { opcode = 0x12, format = "byte" }
+invokevirtual   = { opcode = 0xb6, format = "wide" }
+return          = { opcode = 0xb1 }

@@ -1,9 +1,9 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, io};
 
+use jay_bytecode::BytecodeStream;
 use log::trace;
 
 use crate::{
-    bytecode::{Bytecode, BytecodeStream},
     class_path::ClassPath,
     classfile::{AccessFlags, ClassFile, CodeAttribute, ConstantPool},
     Error, Result,
@@ -46,7 +46,7 @@ impl<'a> Runtime<'a> {
         let class_file = ClassFile::parse(bytes)?;
 
         let name = class_file.class_name()?;
-        let super_class = class_file.super_class_name()?;
+        let _super_class = class_file.super_class_name()?;
 
         let methods = class_file
             .methods()
@@ -131,13 +131,16 @@ struct Frame<'a> {
     code_attribute: &'a CodeAttribute,
 }
 impl BytecodeStream for Frame<'_> {
-    fn readb(&mut self) -> u8 {
-        let b = self.code_attribute.code[self.pc];
+    fn read_u8(&mut self) -> io::Result<u8> {
+        let b = self
+            .code_attribute
+            .code
+            .get(self.pc)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::UnexpectedEof))?;
         self.pc += 1;
-        b
+        Ok(*b)
     }
 }
-
 enum MethodBody {
     Native,
     Code(CodeAttribute),
@@ -155,11 +158,14 @@ impl MethodBody {
 
                 loop {
                     let pc = frame.pc;
-                    let bytecode = Bytecode::from_stream(&mut frame)?;
-                    trace!("{:>4}: {}", pc, bytecode);
 
-                    bytecode.handle();
+                    match frame.next() {
+                        Some(bytecode) => trace!("{pc:>4}: {bytecode}"),
+                        None => break,
+                    }
                 }
+
+                Ok(())
             }
         }
     }
