@@ -1,11 +1,11 @@
-use std::{cell::RefCell, io};
+use std::{cell::RefCell, io, rc::Rc};
 
 use log::trace;
 
 use crate::{
     bytecode::BytecodeStream,
-    class_path::ClassPath,
-    classfile::{AccessFlags, ClassFile, CodeAttribute, ConstantPool},
+    class_path::{ClassPath, SeekRead},
+    classfile::{ClassFile, CodeAttribute, ConstantPool},
     Error, Result,
 };
 
@@ -22,161 +22,148 @@ impl Runtime<'_> {
         }
     }
 
-    pub fn run_with_main(&self, main_class_name: &str) -> Result<()> {
-        let class_id = self.load_class(main_class_name)?;
+    pub fn load_class(&self, class_name: &str) -> Result<Rc<Class>> {
+        trace!("Loading class {}", class_name);
 
-        let classes = self.classes.borrow();
-        let main = classes[class_id]
-            .find_method("main", &[])
-            .ok_or_else(|| Error::NoSuchMethod("main".to_owned()))?;
+        let bytes = self.resolve_class(class_name)?;
+        let mut class = self.define_class(class_name, bytes)?;
+        self.initialize_class(&mut class)?;
 
-        main.invoke(self)?;
-
-        Ok(())
+        Ok(class)
     }
 
-    fn load_class(&self, class_name: &str) -> Result<ClassId> {
-        trace!("Loading class. name={}", class_name);
+    fn resolve_class(&self, class_name: &str) -> Result<Box<dyn SeekRead + '_>> {
+        trace!("Resolving class {}", class_name);
 
         let resource_name = class_name.replace(".", "/") + ".class";
-        let bytes = self
-            .class_path
+
+        self.class_path
             .find_resource(&resource_name)
-            .ok_or_else(|| Error::NotFound(resource_name.into()))?;
+            .ok_or_else(|| Error::NotFound(resource_name.into()))
+    }
+
+    fn define_class(&self, class_name: &str, bytes: impl SeekRead) -> Result<Rc<Class>> {
+        trace!("Defining class {}", class_name);
         let class_file = ClassFile::parse(bytes)?;
 
         let name = class_file.class_name()?;
-        let _super_class = class_file.super_class_name()?;
+        let super_class = if let Some(super_class_name) = class_file.super_class_name()? {
+            let bytes = self.resolve_class(&super_class_name)?;
+            Some(self.define_class(super_class_name, bytes)?)
+        } else {
+            None
+        };
 
         let methods = class_file
             .methods()
             .map(|m| {
                 let name = m.name()?;
-                let body = if m.access_flags().contains(AccessFlags::NATIVE) {
-                    MethodBody::Native
-                } else {
-                    MethodBody::Code(m.attributes().code()?.expect("Expecting code method body"))
-                };
+                let code = m.attributes().code()?;
 
                 Ok(Method {
                     name: name.to_owned(),
-                    body,
+                    code,
                 })
             })
             .collect::<Result<_, Error>>()?;
 
-        let class_id = self.add_class(Class {
+        let class = Rc::new(Class {
             name: name.to_string(),
-            super_class: None, // TODO
+            super_class,
             constant_pool: class_file.constant_pool,
             methods,
-        })?;
+            initialized: RefCell::new(false),
+        });
 
-        let classes = self.classes.borrow();
-        if let Some(clinit) = classes[class_id].find_method("<clinit>", &[]) {
-            clinit.invoke(self)?;
+        Ok(class)
+    }
+
+    fn initialize_class(&self, class: &Rc<Class>) -> Result<()> {
+        if let Some(super_class) = &class.super_class {
+            self.initialize_class(super_class)?;
         }
 
-        Ok(class_id)
+        if *class.initialized.borrow() {
+            return Ok(());
+        }
+
+        trace!("Initializing class {}", class.name);
+
+        if let Some(clinit) = class.find_method("<clinit>") {
+            self.invoke(&clinit)?;
+        }
+
+        *class.initialized.borrow_mut() = true;
+
+        Ok(())
     }
 
-    fn add_class(&self, class: Class) -> Result<ClassId> {
-        self.classes.borrow_mut().push(class);
+    pub fn invoke(&self, method: &ClassMethod) -> Result<()> {
+        trace!("Invoking method {}", method.method.name);
 
-        Ok(self.classes.borrow().len() - 1)
+        if let Some(code) = &method.method.code {
+            let mut frame = Frame {
+                pc: 0,
+                class: &method.class,
+                code,
+            };
+
+            loop {
+                let pc = frame.pc;
+
+                match frame.next() {
+                    Some(bytecode) => trace!("{pc:>4}: {bytecode}"),
+                    None => break,
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
-type ClassId = usize;
-
-struct Class {
+pub struct Class {
     name: String,
-    super_class: Option<ClassId>,
+    super_class: Option<Rc<Class>>,
     constant_pool: ConstantPool,
     methods: Vec<Method>,
+    initialized: RefCell<bool>,
 }
 impl Class {
-    fn find_method(&self, name: &str, parameter_types: &[Type]) -> Option<MethodHandle> {
+    pub fn find_method(&self, name: &str) -> Option<ClassMethod> {
         self.methods
             .iter()
             .find(|m| m.name == name)
-            .map(|method| MethodHandle {
+            .map(|method| ClassMethod {
                 method,
                 class: self,
             })
     }
 }
 
-struct MethodHandle<'a> {
-    method: &'a Method,
+pub struct ClassMethod<'a> {
     class: &'a Class,
-}
-impl MethodHandle<'_> {
-    fn invoke(&self, runtime: &Runtime) -> Result<()> {
-        trace!("Invoking method {}", self.method.name);
-        trace!("Constant pool: {:?}", self.class.constant_pool);
-
-        self.method.body.invoke(self, runtime)
-    }
+    method: &'a Method,
 }
 
 struct Method {
     name: String,
-    body: MethodBody,
+    code: Option<CodeAttribute>,
 }
 
-struct Frame<'a> {
+struct Frame<'a, 'b> {
     pc: usize,
     class: &'a Class,
-    code_attribute: &'a CodeAttribute,
+    code: &'b CodeAttribute,
 }
-impl BytecodeStream for Frame<'_> {
+impl BytecodeStream for Frame<'_, '_> {
     fn read_u8(&mut self) -> io::Result<u8> {
         let b = self
-            .code_attribute
+            .code
             .code
             .get(self.pc)
             .ok_or_else(|| io::Error::from(io::ErrorKind::UnexpectedEof))?;
         self.pc += 1;
         Ok(*b)
     }
-}
-enum MethodBody {
-    Native,
-    Code(CodeAttribute),
-}
-impl MethodBody {
-    pub fn invoke(&self, method: &MethodHandle, _runtime: &Runtime) -> Result<()> {
-        match self {
-            Self::Native => todo!(),
-            Self::Code(code_attribute) => {
-                let mut frame = Frame {
-                    pc: 0,
-                    class: &method.class,
-                    code_attribute,
-                };
-
-                loop {
-                    let pc = frame.pc;
-
-                    match frame.next() {
-                        Some(bytecode) => trace!("{pc:>4}: {bytecode}"),
-                        None => break,
-                    }
-                }
-
-                Ok(())
-            }
-        }
-    }
-}
-
-#[derive(PartialEq)]
-enum Type {
-    Primitive(PrimitiveType),
-}
-
-#[derive(PartialEq)]
-enum PrimitiveType {
-    Void,
 }

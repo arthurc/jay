@@ -21,7 +21,9 @@ fn main() -> anyhow::Result<()> {
         ClassPath::JImage(jimage),
         ClassPath::Directory("classes".into()),
     ]));
-    runtime.run_with_main("com.example.Main")?;
+    let class = runtime.load_class("com.example.Main")?;
+    let main_method = class.find_method("main").unwrap();
+    runtime.invoke(&main_method)?;
 
     Ok(())
 }
