@@ -1,6 +1,8 @@
 # Agent Instructions
 
-Use test-driven development for implementation work.
+Use test-driven development for implementation work. Documentation-only changes do not require tests.
+
+Update README.md when a change affects project setup, usage, behavior, supported capabilities, or development workflow.
 
 Implement changes in a red-green-refactor loop:
 
