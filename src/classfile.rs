@@ -12,6 +12,7 @@ pub struct ClassFile {
     pub this_class: String,
     pub super_class: Option<String>,
     pub methods: Vec<Method>,
+    pub fields: Vec<Field>,
     pub bootstrap_methods: Vec<BootstrapMethod>,
 }
 
@@ -25,6 +26,12 @@ impl ClassFile {
             .iter()
             .find(|method| method.name == name && method.descriptor == descriptor)
     }
+
+    pub fn has_field(&self, name: &str, descriptor: &str) -> bool {
+        self.fields
+            .iter()
+            .any(|field| field.name == name && field.descriptor == descriptor)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +40,12 @@ pub struct Method {
     pub name: String,
     pub descriptor: String,
     pub code: Option<Code>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Field {
+    pub name: String,
+    pub descriptor: String,
 }
 
 impl Method {
@@ -296,7 +309,7 @@ impl<'a> Parser<'a> {
         };
 
         self.skip_interfaces()?;
-        self.skip_fields()?;
+        let fields = self.parse_fields(&constant_pool)?;
         let methods = self.parse_methods(&constant_pool)?;
         let bootstrap_methods = self.parse_class_attributes(&constant_pool)?;
 
@@ -311,6 +324,7 @@ impl<'a> Parser<'a> {
             this_class,
             super_class,
             methods,
+            fields,
             bootstrap_methods,
         })
     }
@@ -415,13 +429,17 @@ impl<'a> Parser<'a> {
         self.skip(count * 2)
     }
 
-    fn skip_fields(&mut self) -> JayResult<()> {
+    fn parse_fields(&mut self, constant_pool: &ConstantPool) -> JayResult<Vec<Field>> {
         let count = self.read_u2()? as usize;
+        let mut fields = Vec::with_capacity(count);
         for _ in 0..count {
-            self.skip(6)?;
+            self.skip(2)?;
+            let name = constant_pool.utf8(self.read_u2()?)?.to_string();
+            let descriptor = constant_pool.utf8(self.read_u2()?)?.to_string();
             self.skip_attributes()?;
+            fields.push(Field { name, descriptor });
         }
-        Ok(())
+        Ok(fields)
     }
 
     fn parse_methods(&mut self, constant_pool: &ConstantPool) -> JayResult<Vec<Method>> {

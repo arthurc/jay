@@ -309,7 +309,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let field = class_file.constant_pool.field_ref(index)?;
         let field_type = parse_field_descriptor(field.descriptor)?;
         let receiver = frame.pop_object_ref()?;
-        let field_key = FieldKey::new(field.class_name, field.name, field.descriptor);
+        let declaring_class_name =
+            self.resolve_instance_field_class(field.class_name, field.name, field.descriptor)?;
+        let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
         let value = self.heap.get_instance_field(receiver, &field_key)?;
         match (field_type, value) {
             (FieldType::Int, Some(Value::Int(value))) => {
@@ -350,7 +352,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let field_type = parse_field_descriptor(field.descriptor)?;
         let value = frame.pop_field_value(field_type)?;
         let receiver = frame.pop_object_ref()?;
-        let field_key = FieldKey::new(field.class_name, field.name, field.descriptor);
+        let declaring_class_name =
+            self.resolve_instance_field_class(field.class_name, field.name, field.descriptor)?;
+        let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
         self.heap.put_instance_field(receiver, field_key, value)
     }
 
@@ -690,6 +694,29 @@ impl<'a, W: Write> Interpreter<'a, W> {
             receiver_class_name.replace('/', "."),
             method_name,
             descriptor
+        )))
+    }
+
+    fn resolve_instance_field_class(
+        &self,
+        class_name: &str,
+        field_name: &str,
+        field_descriptor: &str,
+    ) -> JayResult<String> {
+        let mut next_class_name = Some(class_name.to_string());
+        while let Some(candidate_class_name) = next_class_name {
+            let class_file = self.load_class_file(&candidate_class_name)?;
+            if class_file.has_field(field_name, field_descriptor) {
+                return Ok(class_file.this_class);
+            }
+            next_class_name = class_file.super_class;
+        }
+
+        Err(JayError::new(format!(
+            "field {}.{}:{} not found",
+            class_name.replace('/', "."),
+            field_name,
+            field_descriptor
         )))
     }
 

@@ -1056,6 +1056,49 @@ public class Main {
 }
 
 #[test]
+fn resolves_inherited_instance_fields_to_declaring_class() {
+    let root = temp_dir("inherited-instance-field-resolution");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Parent {
+    int value;
+
+    int read() {
+        return value;
+    }
+}
+
+class Child extends Parent {
+    void set(int next) {
+        value = next;
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Child child = new Child();
+        child.set(7);
+        System.out.println(child.read());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_constructor_expression_statement() {
     let root = temp_dir("constructor-expression-statement");
     compile_java(
