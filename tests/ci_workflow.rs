@@ -10,7 +10,7 @@ fn github_ci_runs_project_checks() {
     for required in [
         "name: CI",
         "runs-on: ubuntu-latest",
-        "actions/checkout@v4",
+        "actions/checkout@v6",
         "actions/setup-java@v",
         "java-version: '21'",
         "rustup toolchain install stable --profile minimal --component rustfmt,clippy",
