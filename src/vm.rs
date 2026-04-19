@@ -107,12 +107,22 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let index = read_u1(&code.bytes, &mut pc)? as usize;
                     frame.load_int_local(index)?;
                 }
+                0x19 => {
+                    let index = read_u1(&code.bytes, &mut pc)? as usize;
+                    frame.load_reference_local(index)?;
+                }
                 0x1a..=0x1d => frame.load_int_local((opcode - 0x1a) as usize)?,
+                0x2a..=0x2d => frame.load_reference_local((opcode - 0x2a) as usize)?,
                 0x36 => {
                     let index = read_u1(&code.bytes, &mut pc)? as usize;
                     frame.store_int_local(index)?;
                 }
+                0x3a => {
+                    let index = read_u1(&code.bytes, &mut pc)? as usize;
+                    frame.store_reference_local(index)?;
+                }
                 0x3b..=0x3e => frame.store_int_local((opcode - 0x3b) as usize)?,
+                0x4b..=0x4e => frame.store_reference_local((opcode - 0x4b) as usize)?,
                 0x60 => {
                     let right = frame.pop_int()?;
                     let left = frame.pop_int()?;
@@ -161,6 +171,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
                 }
                 0xac => return Ok(Some(Value::Int(frame.pop_int()?))),
+                0xb0 => return Ok(Some(frame.pop_reference()?)),
                 0xb1 => return Ok(None),
                 0xb2 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
@@ -311,9 +322,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} has no Code")))?
             .clone();
 
-        let mut arguments = Vec::with_capacity(descriptor.parameter_count);
-        for _ in 0..descriptor.parameter_count {
-            arguments.push(Value::Int(caller.pop_int()?));
+        let mut arguments = Vec::with_capacity(descriptor.parameter_types.len());
+        for parameter_type in descriptor.parameter_types.iter().rev() {
+            arguments.push(caller.pop_value_of_type(*parameter_type)?);
         }
         arguments.reverse();
 
@@ -324,15 +335,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
             (ReturnType::Void, Some(_)) => Err(JayError::new(format!(
                 "invokestatic target {target_name} returned a value from void method"
             ))),
-            (ReturnType::Int, Some(Value::Int(value))) => {
-                caller.stack.push(Value::Int(value));
+            (ReturnType::Type(return_type), Some(value))
+                if value.value_type() == Some(return_type) =>
+            {
+                caller.stack.push(value);
                 Ok(())
             }
-            (ReturnType::Int, Some(other)) => Err(JayError::new(format!(
-                "invokestatic target {target_name} returned non-int value {other:?}"
+            (ReturnType::Type(return_type), Some(other)) => Err(JayError::new(format!(
+                "invokestatic target {target_name} returned {}, expected {}",
+                other.type_name(),
+                return_type.name()
             ))),
-            (ReturnType::Int, None) => Err(JayError::new(format!(
-                "invokestatic target {target_name} returned void from int method"
+            (ReturnType::Type(return_type), None) => Err(JayError::new(format!(
+                "invokestatic target {target_name} returned void from {} method",
+                return_type.name()
             ))),
         }
     }
@@ -376,6 +392,19 @@ impl Frame {
         Ok(())
     }
 
+    fn load_reference_local(&mut self, index: usize) -> JayResult<()> {
+        let value = self.local_reference(index)?.clone();
+        self.stack.push(value);
+        Ok(())
+    }
+
+    fn store_reference_local(&mut self, index: usize) -> JayResult<()> {
+        let value = self.pop_reference()?;
+        let slot = self.local_slot_mut(index)?;
+        *slot = value;
+        Ok(())
+    }
+
     fn increment_int_local(&mut self, index: usize, value: i32) -> JayResult<()> {
         let current = self.local_int(index)?;
         let slot = self.local_slot_mut(index)?;
@@ -391,6 +420,18 @@ impl Frame {
             ))),
             other => Err(JayError::new(format!(
                 "expected int in local variable #{index}, found {other:?}"
+            ))),
+        }
+    }
+
+    fn local_reference(&self, index: usize) -> JayResult<&Value> {
+        match self.local_slot(index)? {
+            value @ Value::String(_) => Ok(value),
+            Value::Uninitialized => Err(JayError::new(format!(
+                "local variable #{index} is uninitialized"
+            ))),
+            other => Err(JayError::new(format!(
+                "expected reference in local variable #{index}, found {other:?}"
             ))),
         }
     }
@@ -440,6 +481,22 @@ impl Frame {
         }
     }
 
+    fn pop_reference(&mut self) -> JayResult<Value> {
+        match self.pop()? {
+            value @ Value::String(_) => Ok(value),
+            other => Err(JayError::new(format!(
+                "expected reference on stack, found {other:?}"
+            ))),
+        }
+    }
+
+    fn pop_value_of_type(&mut self, value_type: ValueType) -> JayResult<Value> {
+        match value_type {
+            ValueType::Int => Ok(Value::Int(self.pop_int()?)),
+            ValueType::String => Ok(Value::String(self.pop_string()?)),
+        }
+    }
+
     fn pop(&mut self) -> JayResult<Value> {
         self.stack
             .pop()
@@ -447,9 +504,9 @@ impl Frame {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct MethodDescriptor {
-    parameter_count: usize,
+    parameter_types: Vec<ValueType>,
     return_type: ReturnType,
 }
 
@@ -466,28 +523,21 @@ impl MethodDescriptor {
             )));
         };
 
-        let mut parameter_count = 0;
-        for parameter in parameters.chars() {
-            if parameter != 'I' {
-                return Err(JayError::new(format!(
-                    "unsupported method descriptor parameter {parameter} in {descriptor}"
-                )));
-            }
-            parameter_count += 1;
+        let mut parameter_types = Vec::new();
+        let mut remaining_parameters = parameters;
+        while !remaining_parameters.is_empty() {
+            let (parameter_type, remaining) = parse_value_type(remaining_parameters, descriptor)?;
+            parameter_types.push(parameter_type);
+            remaining_parameters = remaining;
         }
 
         let return_type = match return_type {
-            "I" => ReturnType::Int,
             "V" => ReturnType::Void,
-            _ => {
-                return Err(JayError::new(format!(
-                    "unsupported method descriptor return type {return_type} in {descriptor}"
-                )));
-            }
+            _ => ReturnType::Type(parse_complete_value_type(return_type, descriptor)?),
         };
 
         Ok(Self {
-            parameter_count,
+            parameter_types,
             return_type,
         })
     }
@@ -495,8 +545,23 @@ impl MethodDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReturnType {
-    Int,
     Void,
+    Type(ValueType),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValueType {
+    Int,
+    String,
+}
+
+impl ValueType {
+    fn name(self) -> &'static str {
+        match self {
+            ValueType::Int => "int",
+            ValueType::String => "String",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -505,6 +570,61 @@ enum Value {
     Int(i32),
     String(String),
     PrintStream,
+}
+
+impl Value {
+    fn value_type(&self) -> Option<ValueType> {
+        match self {
+            Value::Int(_) => Some(ValueType::Int),
+            Value::String(_) => Some(ValueType::String),
+            Value::Uninitialized | Value::PrintStream => None,
+        }
+    }
+
+    fn type_name(&self) -> &'static str {
+        match self {
+            Value::Uninitialized => "uninitialized",
+            Value::Int(_) => "int",
+            Value::String(_) => "String",
+            Value::PrintStream => "PrintStream",
+        }
+    }
+}
+
+fn parse_complete_value_type(input: &str, descriptor: &str) -> JayResult<ValueType> {
+    let (value_type, remaining) = parse_value_type(input, descriptor)?;
+    if !remaining.is_empty() {
+        return Err(JayError::new(format!(
+            "invalid method descriptor {descriptor}"
+        )));
+    }
+    Ok(value_type)
+}
+
+fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueType, &'a str)> {
+    if let Some(remaining) = input.strip_prefix('I') {
+        return Ok((ValueType::Int, remaining));
+    }
+
+    if let Some(remaining) = input.strip_prefix("Ljava/lang/String;") {
+        return Ok((ValueType::String, remaining));
+    }
+
+    if input.starts_with('[') {
+        return Err(JayError::new(format!(
+            "unsupported array type in method descriptor {descriptor}"
+        )));
+    }
+
+    if input.starts_with('L') {
+        return Err(JayError::new(format!(
+            "unsupported object type in method descriptor {descriptor}"
+        )));
+    }
+
+    Err(JayError::new(format!(
+        "unsupported method descriptor type in {descriptor}"
+    )))
 }
 
 fn read_u1(bytes: &[u8], pc: &mut usize) -> JayResult<u8> {
@@ -640,26 +760,59 @@ mod tests {
     fn parses_int_returning_method_descriptors() {
         let descriptor = MethodDescriptor::parse("(II)I").unwrap();
 
-        assert_eq!(descriptor.parameter_count, 2);
-        assert_eq!(descriptor.return_type, ReturnType::Int);
+        assert_eq!(
+            descriptor.parameter_types,
+            vec![ValueType::Int, ValueType::Int]
+        );
+        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Int));
     }
 
     #[test]
     fn parses_void_method_descriptors() {
         let descriptor = MethodDescriptor::parse("(I)V").unwrap();
 
-        assert_eq!(descriptor.parameter_count, 1);
+        assert_eq!(descriptor.parameter_types, vec![ValueType::Int]);
         assert_eq!(descriptor.return_type, ReturnType::Void);
     }
 
     #[test]
-    fn rejects_unsupported_method_descriptors() {
-        let error = MethodDescriptor::parse("(Ljava/lang/String;)V").unwrap_err();
+    fn parses_string_returning_method_descriptors() {
+        let descriptor = MethodDescriptor::parse("()Ljava/lang/String;").unwrap();
 
-        assert!(
-            error
-                .to_string()
-                .contains("unsupported method descriptor parameter")
+        assert_eq!(descriptor.parameter_types, Vec::new());
+        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::String));
+    }
+
+    #[test]
+    fn parses_string_parameter_method_descriptors() {
+        let descriptor = MethodDescriptor::parse("(Ljava/lang/String;)V").unwrap();
+
+        assert_eq!(descriptor.parameter_types, vec![ValueType::String]);
+        assert_eq!(descriptor.return_type, ReturnType::Void);
+    }
+
+    #[test]
+    fn parses_mixed_supported_method_descriptors() {
+        let descriptor = MethodDescriptor::parse("(ILjava/lang/String;)V").unwrap();
+
+        assert_eq!(
+            descriptor.parameter_types,
+            vec![ValueType::Int, ValueType::String]
         );
+        assert_eq!(descriptor.return_type, ReturnType::Void);
+    }
+
+    #[test]
+    fn rejects_unsupported_object_method_descriptors() {
+        let error = MethodDescriptor::parse("(Ljava/lang/Object;)V").unwrap_err();
+
+        assert!(error.to_string().contains("unsupported object type"));
+    }
+
+    #[test]
+    fn rejects_array_method_descriptors() {
+        let error = MethodDescriptor::parse("([Ljava/lang/String;)V").unwrap_err();
+
+        assert!(error.to_string().contains("unsupported array type"));
     }
 }
