@@ -24,3 +24,23 @@ fn github_ci_runs_project_checks() {
         );
     }
 }
+
+#[test]
+fn dependabot_updates_cargo_dependencies_and_github_actions() {
+    let dependabot_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/dependabot.yml");
+    let dependabot = fs::read_to_string(&dependabot_path)
+        .expect("expected a Dependabot config at .github/dependabot.yml");
+
+    for required in [
+        "version: 2",
+        "package-ecosystem: \"cargo\"",
+        "package-ecosystem: \"github-actions\"",
+        "directory: \"/\"",
+        "interval: \"weekly\"",
+    ] {
+        assert!(
+            dependabot.contains(required),
+            "Dependabot config should contain `{required}`"
+        );
+    }
+}
