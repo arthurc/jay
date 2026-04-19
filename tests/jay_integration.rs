@@ -250,13 +250,13 @@ public class MultiplicationMain {
 }
 
 #[test]
-fn reports_unsupported_bytecode() {
-    let root = temp_dir("unsupported-bytecode");
+fn runs_integer_division() {
+    let root = temp_dir("integer-division");
     compile_java(
         &root,
-        "UnsupportedMain.java",
+        "DivisionMain.java",
         r#"
-public class UnsupportedMain {
+public class DivisionMain {
     public static void main(String[] args) {
         int x = 6;
         int y = 3;
@@ -266,10 +266,11 @@ public class UnsupportedMain {
 "#,
     );
 
-    let output = jay(&["-cp", root.to_str().unwrap(), "UnsupportedMain"]);
+    let output = jay(&["-cp", root.to_str().unwrap(), "DivisionMain"]);
 
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported bytecode"));
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "2\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
 
 #[test]

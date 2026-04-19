@@ -105,6 +105,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let left = self.pop_int()?;
                     self.stack.push(Value::Int(left.wrapping_mul(right)));
                 }
+                0x6c => {
+                    let right = self.pop_int()?;
+                    let left = self.pop_int()?;
+                    if right == 0 {
+                        return Err(JayError::new("integer division by zero"));
+                    }
+                    self.stack.push(Value::Int(left.wrapping_div(right)));
+                }
                 0x84 => {
                     let index = read_u1(&code.bytes, &mut pc)? as usize;
                     let value = read_u1(&code.bytes, &mut pc)? as i8 as i32;
