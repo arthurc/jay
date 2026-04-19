@@ -226,6 +226,30 @@ public class ArithmeticMain {
 }
 
 #[test]
+fn runs_integer_multiplication() {
+    let root = temp_dir("integer-multiplication");
+    compile_java(
+        &root,
+        "MultiplicationMain.java",
+        r#"
+public class MultiplicationMain {
+    public static void main(String[] args) {
+        int x = 2;
+        int y = 3;
+        System.out.println(x * y);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "MultiplicationMain"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "6\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn reports_unsupported_bytecode() {
     let root = temp_dir("unsupported-bytecode");
     compile_java(
@@ -234,9 +258,9 @@ fn reports_unsupported_bytecode() {
         r#"
 public class UnsupportedMain {
     public static void main(String[] args) {
-        int x = 2;
+        int x = 6;
         int y = 3;
-        System.out.println(x * y);
+        System.out.println(x / y);
     }
 }
 "#,

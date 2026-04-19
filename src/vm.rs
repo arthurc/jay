@@ -93,12 +93,17 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.load_constant(index)?;
                 }
-                0x1b => self.load_int_local(1)?,
-                0x3c => self.store_int_local(1)?,
+                0x1a..=0x1d => self.load_int_local((opcode - 0x1a) as usize)?,
+                0x3b..=0x3e => self.store_int_local((opcode - 0x3b) as usize)?,
                 0x60 => {
                     let right = self.pop_int()?;
                     let left = self.pop_int()?;
                     self.stack.push(Value::Int(left.wrapping_add(right)));
+                }
+                0x68 => {
+                    let right = self.pop_int()?;
+                    let left = self.pop_int()?;
+                    self.stack.push(Value::Int(left.wrapping_mul(right)));
                 }
                 0x84 => {
                     let index = read_u1(&code.bytes, &mut pc)? as usize;
