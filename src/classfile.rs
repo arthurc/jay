@@ -53,6 +53,10 @@ impl Method {
         self.access_flags & 0x0008 != 0
     }
 
+    pub fn is_private(&self) -> bool {
+        self.access_flags & 0x0002 != 0
+    }
+
     pub fn is_public(&self) -> bool {
         self.access_flags & 0x0001 != 0
     }

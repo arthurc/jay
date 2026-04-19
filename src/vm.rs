@@ -15,7 +15,7 @@ use frame::Frame;
 use heap::{FieldKey, Heap};
 use value::Value;
 
-use crate::classfile::{ClassFile, Code};
+use crate::classfile::{ClassFile, Code, Method};
 use crate::classpath::ClassResolver;
 use crate::{JayError, JayResult};
 
@@ -393,22 +393,39 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let mut arguments = self.pop_method_arguments(frame, &descriptor)?;
         let receiver = frame.pop_object_ref()?;
         let receiver_class_name = self.heap.instance_class_name(receiver)?.to_string();
-        let target_class_file = self.resolve_instance_method_class(
-            &receiver_class_name,
+        let (declaring_class_file, declaring_method) = self.resolve_instance_method(
+            method.class_name,
             &target_method_name,
             &target_descriptor,
         )?;
+        let (target_class_file, target_method) = if declaring_method.is_private() {
+            (declaring_class_file, declaring_method)
+        } else {
+            let class_file = self.resolve_instance_method_class(
+                &receiver_class_name,
+                &target_method_name,
+                &target_descriptor,
+            )?;
+            let method = class_file
+                .find_method(&target_method_name, &target_descriptor)
+                .ok_or_else(|| {
+                    let target_name = format!(
+                        "{}.{}{}",
+                        class_file.this_class.replace('/', "."),
+                        target_method_name,
+                        target_descriptor
+                    );
+                    JayError::new(format!("invokevirtual target {target_name} not found"))
+                })?
+                .clone();
+            (class_file, method)
+        };
         let target_name = format!(
             "{}.{}{}",
             target_class_file.this_class.replace('/', "."),
             target_method_name,
             target_descriptor
         );
-        let target_method = target_class_file
-            .find_method(&target_method_name, &target_descriptor)
-            .ok_or_else(|| {
-                JayError::new(format!("invokevirtual target {target_name} not found"))
-            })?;
 
         if target_method.is_static() {
             return Err(JayError::new(format!(
@@ -695,6 +712,29 @@ impl<'a, W: Write> Interpreter<'a, W> {
             method_name,
             descriptor
         )))
+    }
+
+    /// Resolves an instance method reference against the symbolic owner class hierarchy.
+    fn resolve_instance_method(
+        &self,
+        owner_class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> JayResult<(ClassFile, Method)> {
+        let class_file =
+            self.resolve_instance_method_class(owner_class_name, method_name, descriptor)?;
+        let method = class_file
+            .find_method(method_name, descriptor)
+            .ok_or_else(|| {
+                JayError::new(format!(
+                    "invokevirtual target {}.{}{} not found",
+                    owner_class_name.replace('/', "."),
+                    method_name,
+                    descriptor
+                ))
+            })?
+            .clone();
+        Ok((class_file, method))
     }
 
     fn resolve_instance_field_class(

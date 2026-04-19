@@ -1099,6 +1099,63 @@ public class Main {
 }
 
 #[test]
+fn invokes_private_virtual_targets_without_subclass_dispatch() {
+    let root = temp_dir("private-invokevirtual-no-subclass-dispatch");
+    compile_java_sources(
+        &root,
+        &[
+            (
+                "Parent.java",
+                r#"
+public class Parent {
+    private String marker() {
+        return "A";
+    }
+
+    String callMarker() {
+        return marker();
+    }
+}
+"#,
+            ),
+            (
+                "Child.java",
+                r#"
+public class Child extends Parent {
+    String marker() {
+        return "B";
+    }
+}
+"#,
+            ),
+            (
+                "Main.java",
+                r#"
+public class Main {
+    public static void main(String[] args) {
+        Child child = new Child();
+        System.out.println(child.callMarker());
+        System.out.println(child.marker());
+    }
+}
+"#,
+            ),
+        ],
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "A\nB\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_constructor_expression_statement() {
     let root = temp_dir("constructor-expression-statement");
     compile_java(
