@@ -103,7 +103,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.load_constant(class_file, frame, index)?;
                 }
+                0x15 => {
+                    let index = read_u1(&code.bytes, &mut pc)? as usize;
+                    frame.load_int_local(index)?;
+                }
                 0x1a..=0x1d => frame.load_int_local((opcode - 0x1a) as usize)?,
+                0x36 => {
+                    let index = read_u1(&code.bytes, &mut pc)? as usize;
+                    frame.store_int_local(index)?;
+                }
                 0x3b..=0x3e => frame.store_int_local((opcode - 0x3b) as usize)?,
                 0x60 => {
                     let right = frame.pop_int()?;
