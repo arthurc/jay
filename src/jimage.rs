@@ -718,15 +718,14 @@ fn hash_code(value: &str, seed: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jdk::default_boot_image_path;
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
     use std::io::Write;
 
-    const DEFAULT_JIMAGE: &str = "/Users/arthur/.sdkman/candidates/java/current/lib/modules";
-
     #[test]
     fn parses_default_jdk_jimage_header() {
-        let image = JImage::open(DEFAULT_JIMAGE).unwrap();
+        let image = JImage::open(default_boot_image_path().unwrap()).unwrap();
 
         assert_eq!(image.header().major_version, 1);
         assert_eq!(image.header().minor_version, 0);
@@ -739,7 +738,7 @@ mod tests {
 
     #[test]
     fn finds_resource_by_module_and_path() {
-        let image = JImage::open(DEFAULT_JIMAGE).unwrap();
+        let image = JImage::open(default_boot_image_path().unwrap()).unwrap();
 
         let location = image
             .find_resource("java.base", "java/lang/Object.class")
@@ -751,7 +750,7 @@ mod tests {
 
     #[test]
     fn loads_uncompressed_resource_bytes() {
-        let image = JImage::open(DEFAULT_JIMAGE).unwrap();
+        let image = JImage::open(default_boot_image_path().unwrap()).unwrap();
         let location = image
             .find_resource("java.base", "java/lang/Object.class")
             .unwrap()
@@ -764,7 +763,7 @@ mod tests {
 
     #[test]
     fn loads_class_by_binary_name_without_module() {
-        let image = JImage::open(DEFAULT_JIMAGE).unwrap();
+        let image = JImage::open(default_boot_image_path().unwrap()).unwrap();
 
         let bytes = image.load_class_bytes("java.lang.Object").unwrap().unwrap();
 

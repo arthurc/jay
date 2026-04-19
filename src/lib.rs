@@ -1,6 +1,7 @@
 pub mod classfile;
 pub mod classpath;
 pub mod cli;
+mod jdk;
 pub mod jimage;
 pub mod vm;
 

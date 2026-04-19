@@ -1,21 +1,24 @@
 use std::path::{Path, PathBuf};
 
+use crate::jdk::default_boot_image_path;
 use crate::jimage::JImage;
 use crate::{JayError, JayResult};
-
-pub const DEFAULT_BOOT_IMAGE: &str = "/Users/arthur/.sdkman/candidates/java/current/lib/modules";
 
 #[derive(Debug, Clone)]
 pub struct ClassResolver {
     classpath: PathBuf,
+    boot_image_path: PathBuf,
     boot_image: JImage,
 }
 
 impl ClassResolver {
     pub fn new(classpath: PathBuf) -> JayResult<Self> {
+        let boot_image_path = default_boot_image_path()?;
+        let boot_image = JImage::open(&boot_image_path)?;
         Ok(Self {
             classpath,
-            boot_image: JImage::open(DEFAULT_BOOT_IMAGE)?,
+            boot_image_path,
+            boot_image,
         })
     }
 
@@ -37,9 +40,9 @@ impl ClassResolver {
         }
 
         Err(JayError::new(format!(
-            "could not read class {class_name} at {} or default JImage {}",
+            "could not read class {class_name} at {} or boot image {}",
             path.display(),
-            DEFAULT_BOOT_IMAGE
+            self.boot_image_path.display()
         )))
     }
 }
