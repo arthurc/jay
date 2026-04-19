@@ -407,6 +407,35 @@ public class MultiplicationMain {
 }
 
 #[test]
+fn runs_integer_subtraction() {
+    let root = temp_dir("integer-subtraction");
+    compile_java(
+        &root,
+        "SubtractionMain.java",
+        r#"
+public class SubtractionMain {
+    public static void main(String[] args) {
+        int x = 9;
+        int y = 4;
+        System.out.println(x - y);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "SubtractionMain"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "5\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_integer_division() {
     let root = temp_dir("integer-division");
     compile_java(
