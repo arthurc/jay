@@ -274,6 +274,109 @@ public class DivisionMain {
 }
 
 #[test]
+fn runs_integer_if_else_branches() {
+    let root = temp_dir("integer-if-else");
+    compile_java(
+        &root,
+        "BranchMain.java",
+        r#"
+public class BranchMain {
+    public static void main(String[] args) {
+        int x = 7;
+        if (x > 3) {
+            System.out.println("large");
+        } else {
+            System.out.println("small");
+        }
+
+        int y = 2;
+        if (y > 3) {
+            System.out.println("large");
+        } else {
+            System.out.println("small");
+        }
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "BranchMain"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "large\nsmall\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_simple_integer_loop() {
+    let root = temp_dir("integer-loop");
+    compile_java(
+        &root,
+        "LoopMain.java",
+        r#"
+public class LoopMain {
+    public static void main(String[] args) {
+        int sum = 0;
+        for (int i = 0; i < 3; i++) {
+            sum += i;
+        }
+        System.out.println(sum);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "LoopMain"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_integer_zero_comparison_branches() {
+    let root = temp_dir("integer-zero-comparisons");
+    compile_java(
+        &root,
+        "ZeroBranchMain.java",
+        r#"
+public class ZeroBranchMain {
+    public static void main(String[] args) {
+        int value = 0;
+        if (value == 0) {
+            System.out.println("zero");
+        }
+
+        value = 1;
+        if (value != 0) {
+            System.out.println("nonzero");
+        }
+
+        value = -1;
+        if (value < 0) {
+            System.out.println("negative");
+        }
+
+        value = 1;
+        if (value > 0) {
+            System.out.println("positive");
+        }
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "ZeroBranchMain"]);
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "zero\nnonzero\nnegative\npositive\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn reports_malformed_class_file() {
     let root = temp_dir("malformed");
     std::fs::write(root.join("Broken.class"), b"broken").unwrap();
