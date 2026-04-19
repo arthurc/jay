@@ -616,7 +616,7 @@ public class NonStaticMain {
 }
 
 #[test]
-fn reports_cross_class_static_method_call_as_unsupported() {
+fn runs_cross_class_static_int_method() {
     let root = temp_dir("cross-class-invokestatic");
     compile_java_sources(
         &root,
@@ -646,9 +646,87 @@ public class CrossClassMain {
 
     let output = jay(&["-cp", root.to_str().unwrap(), "CrossClassMain"]);
 
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "11\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_packaged_cross_class_static_int_method() {
+    let root = temp_dir("packaged-cross-class-invokestatic");
+    compile_java_sources(
+        &root,
+        &[
+            (
+                "com/example/Other.java",
+                r#"
+package com.example;
+
+public class Other {
+    static int value() {
+        return 13;
+    }
+}
+"#,
+            ),
+            (
+                "com/example/Main.java",
+                r#"
+package com.example;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(Other.value());
+    }
+}
+"#,
+            ),
+        ],
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "com.example.Main"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "13\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn reports_non_static_cross_class_method_called_with_invokestatic() {
+    let root = temp_dir("non-static-cross-class-invokestatic");
+    compile_java_sources(
+        &root,
+        &[
+            (
+                "Other.java",
+                r#"
+public class Other {
+    static int value() {
+        return 17;
+    }
+}
+"#,
+            ),
+            (
+                "Main.java",
+                r#"
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(Other.value());
+    }
+}
+"#,
+            ),
+        ],
+    );
+    make_method_non_static(&root, "Other.class", "value");
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
     assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("unsupported invokestatic Other.value()I")
+        String::from_utf8_lossy(&output.stderr)
+            .contains("invokestatic target Other.value()I must be static")
     );
 }
 

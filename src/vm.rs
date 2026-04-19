@@ -42,9 +42,9 @@ impl Vm {
             .as_ref()
             .ok_or_else(|| JayError::new(format!("main method in {main_class} has no Code")))?;
 
-        let mut interpreter = Interpreter::new(&class_file, output);
+        let mut interpreter = Interpreter::new(&self.classes, output);
         let mut frame = Frame::new(code.max_locals);
-        match interpreter.execute(code, &mut frame)? {
+        match interpreter.execute(&class_file, code, &mut frame)? {
             None => Ok(()),
             Some(_) => Err(JayError::new(format!(
                 "main method in {main_class} returned a value"
@@ -54,7 +54,7 @@ impl Vm {
 }
 
 struct Interpreter<'a, W: Write> {
-    class_file: &'a ClassFile,
+    classes: &'a ClassResolver,
     output: &'a mut W,
 }
 
@@ -64,11 +64,16 @@ struct Frame {
 }
 
 impl<'a, W: Write> Interpreter<'a, W> {
-    fn new(class_file: &'a ClassFile, output: &'a mut W) -> Self {
-        Self { class_file, output }
+    fn new(classes: &'a ClassResolver, output: &'a mut W) -> Self {
+        Self { classes, output }
     }
 
-    fn execute(&mut self, code: &Code, frame: &mut Frame) -> JayResult<Option<Value>> {
+    fn execute(
+        &mut self,
+        class_file: &ClassFile,
+        code: &Code,
+        frame: &mut Frame,
+    ) -> JayResult<Option<Value>> {
         let mut pc = 0usize;
         while pc < code.bytes.len() {
             let opcode_pc = pc;
@@ -92,11 +97,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 }
                 0x12 => {
                     let index = read_u1(&code.bytes, &mut pc)? as u16;
-                    self.load_constant(frame, index)?;
+                    self.load_constant(class_file, frame, index)?;
                 }
                 0x13 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
-                    self.load_constant(frame, index)?;
+                    self.load_constant(class_file, frame, index)?;
                 }
                 0x1a..=0x1d => frame.load_int_local((opcode - 0x1a) as usize)?,
                 0x3b..=0x3e => frame.store_int_local((opcode - 0x3b) as usize)?,
@@ -146,15 +151,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 0xb1 => return Ok(None),
                 0xb2 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
-                    self.get_static(frame, index)?;
+                    self.get_static(class_file, frame, index)?;
                 }
                 0xb6 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
-                    self.invoke_virtual(frame, index)?;
+                    self.invoke_virtual(class_file, frame, index)?;
                 }
                 0xb8 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
-                    self.invoke_static(frame, index)?;
+                    self.invoke_static(class_file, frame, index)?;
                 }
                 _ => {
                     return Err(JayError::new(format!(
@@ -167,8 +172,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Err(JayError::new("main method completed without return"))
     }
 
-    fn load_constant(&mut self, frame: &mut Frame, index: u16) -> JayResult<()> {
-        let constant_pool = &self.class_file.constant_pool;
+    fn load_constant(
+        &mut self,
+        class_file: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let constant_pool = &class_file.constant_pool;
         if let Ok(value) = constant_pool.string(index) {
             frame.stack.push(Value::String(value.to_string()));
             return Ok(());
@@ -184,8 +194,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
         )))
     }
 
-    fn get_static(&mut self, frame: &mut Frame, index: u16) -> JayResult<()> {
-        let field = self.class_file.constant_pool.field_ref(index)?;
+    fn get_static(
+        &mut self,
+        class_file: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let field = class_file.constant_pool.field_ref(index)?;
         if field.class_name == "java/lang/System"
             && field.name == "out"
             && field.descriptor == "Ljava/io/PrintStream;"
@@ -200,8 +215,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
     }
 
-    fn invoke_virtual(&mut self, frame: &mut Frame, index: u16) -> JayResult<()> {
-        let method = self.class_file.constant_pool.method_ref(index)?;
+    fn invoke_virtual(
+        &mut self,
+        class_file: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let method = class_file.constant_pool.method_ref(index)?;
         if method.class_name == "java/io/PrintStream" && method.name == "println" {
             return match method.descriptor {
                 "(Ljava/lang/String;)V" => {
@@ -229,25 +249,35 @@ impl<'a, W: Write> Interpreter<'a, W> {
         )))
     }
 
-    fn invoke_static(&mut self, caller: &mut Frame, index: u16) -> JayResult<()> {
-        let method_ref = self.class_file.constant_pool.method_ref(index)?;
+    fn invoke_static(
+        &mut self,
+        caller_class_file: &ClassFile,
+        caller: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let method_ref = caller_class_file.constant_pool.method_ref(index)?;
+        let target_class_name = method_ref.class_name.to_string();
+        let target_method_name = method_ref.name.to_string();
+        let target_descriptor = method_ref.descriptor.to_string();
         let target_name = format!(
             "{}.{}{}",
-            method_ref.class_name.replace('/', "."),
-            method_ref.name,
-            method_ref.descriptor
+            target_class_name.replace('/', "."),
+            target_method_name,
+            target_descriptor
         );
 
-        if method_ref.class_name != self.class_file.this_class {
-            return Err(JayError::new(format!(
-                "unsupported invokestatic {target_name}"
-            )));
-        }
-
-        let descriptor = MethodDescriptor::parse(method_ref.descriptor)?;
-        let method = self
-            .class_file
-            .find_method(method_ref.name, method_ref.descriptor)
+        let descriptor = MethodDescriptor::parse(&target_descriptor)?;
+        let loaded_class_file;
+        let target_class_file = if target_class_name == caller_class_file.this_class {
+            caller_class_file
+        } else {
+            let binary_name = target_class_name.replace('/', ".");
+            let bytes = self.classes.load_class_bytes(&binary_name)?;
+            loaded_class_file = ClassFile::parse(&bytes)?;
+            &loaded_class_file
+        };
+        let method = target_class_file
+            .find_method(&target_method_name, &target_descriptor)
             .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} not found")))?;
 
         if !method.is_static() {
@@ -275,7 +305,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         arguments.reverse();
 
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
-        let result = self.execute(&code, &mut callee)?;
+        let result = self.execute(target_class_file, &code, &mut callee)?;
         match (descriptor.return_type, result) {
             (ReturnType::Void, None) => Ok(()),
             (ReturnType::Void, Some(_)) => Err(JayError::new(format!(
