@@ -110,6 +110,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let left = frame.pop_int()?;
                     frame.stack.push(Value::Int(left.wrapping_add(right)));
                 }
+                0x64 => {
+                    let right = frame.pop_int()?;
+                    let left = frame.pop_int()?;
+                    frame.stack.push(Value::Int(left.wrapping_sub(right)));
+                }
                 0x68 => {
                     let right = frame.pop_int()?;
                     let left = frame.pop_int()?;
