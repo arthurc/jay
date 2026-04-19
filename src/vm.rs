@@ -56,6 +56,8 @@ impl Vm {
 struct Interpreter<'a, W: Write> {
     classes: &'a ClassResolver,
     output: &'a mut W,
+    heap: Heap,
+    saved_roots: Vec<Vec<Value>>,
 }
 
 struct Frame {
@@ -65,7 +67,12 @@ struct Frame {
 
 impl<'a, W: Write> Interpreter<'a, W> {
     fn new(classes: &'a ClassResolver, output: &'a mut W) -> Self {
-        Self { classes, output }
+        Self {
+            classes,
+            output,
+            heap: Heap::new(),
+            saved_roots: Vec::new(),
+        }
     }
 
     fn execute(
@@ -204,7 +211,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<()> {
         let constant_pool = &class_file.constant_pool;
         if let Ok(value) = constant_pool.string(index) {
-            frame.stack.push(Value::String(value.to_string()));
+            let reference = self.heap.allocate_string(value);
+            frame.stack.push(Value::Reference(reference));
+            self.collect_if_needed(frame);
             return Ok(());
         }
 
@@ -249,8 +258,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
         if method.class_name == "java/io/PrintStream" && method.name == "println" {
             return match method.descriptor {
                 "(Ljava/lang/String;)V" => {
-                    let value = frame.pop_string()?;
+                    let reference = frame.pop_string_reference()?;
                     frame.pop_print_stream()?;
+                    let value = self.heap.string(reference)?;
                     writeln!(self.output, "{value}")?;
                     Ok(())
                 }
@@ -329,7 +339,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
         arguments.reverse();
 
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
-        let result = self.execute(target_class_file, &code, &mut callee)?;
+        self.saved_roots
+            .push(caller.roots().cloned().collect::<Vec<_>>());
+        let result = self.execute(target_class_file, &code, &mut callee);
+        self.saved_roots.pop();
+        let result = result?;
         match (descriptor.return_type, result) {
             (ReturnType::Void, None) => Ok(()),
             (ReturnType::Void, Some(_)) => Err(JayError::new(format!(
@@ -351,6 +365,21 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 return_type.name()
             ))),
         }
+    }
+
+    fn collect_if_needed(&mut self, current_frame: &Frame) {
+        if !self.heap.should_collect() {
+            return;
+        }
+
+        let roots = self
+            .saved_roots
+            .iter()
+            .flatten()
+            .cloned()
+            .chain(current_frame.roots().cloned())
+            .collect::<Vec<_>>();
+        self.heap.collect(roots.iter());
     }
 }
 
@@ -426,7 +455,7 @@ impl Frame {
 
     fn local_reference(&self, index: usize) -> JayResult<&Value> {
         match self.local_slot(index)? {
-            value @ Value::String(_) => Ok(value),
+            value @ Value::Reference(_) => Ok(value),
             Value::Uninitialized => Err(JayError::new(format!(
                 "local variable #{index} is uninitialized"
             ))),
@@ -463,9 +492,9 @@ impl Frame {
         }
     }
 
-    fn pop_string(&mut self) -> JayResult<String> {
+    fn pop_string_reference(&mut self) -> JayResult<ObjectRef> {
         match self.pop()? {
-            Value::String(value) => Ok(value),
+            Value::Reference(reference) => Ok(reference),
             other => Err(JayError::new(format!(
                 "expected string on stack, found {other:?}"
             ))),
@@ -483,7 +512,7 @@ impl Frame {
 
     fn pop_reference(&mut self) -> JayResult<Value> {
         match self.pop()? {
-            value @ Value::String(_) => Ok(value),
+            value @ Value::Reference(_) => Ok(value),
             other => Err(JayError::new(format!(
                 "expected reference on stack, found {other:?}"
             ))),
@@ -493,7 +522,7 @@ impl Frame {
     fn pop_value_of_type(&mut self, value_type: ValueType) -> JayResult<Value> {
         match value_type {
             ValueType::Int => Ok(Value::Int(self.pop_int()?)),
-            ValueType::String => Ok(Value::String(self.pop_string()?)),
+            ValueType::String => Ok(Value::Reference(self.pop_string_reference()?)),
         }
     }
 
@@ -501,6 +530,119 @@ impl Frame {
         self.stack
             .pop()
             .ok_or_else(|| JayError::new("operand stack underflow"))
+    }
+
+    fn roots(&self) -> impl Iterator<Item = &Value> {
+        self.locals
+            .iter()
+            .chain(self.stack.iter())
+            .filter(|value| matches!(value, Value::Reference(_)))
+    }
+}
+
+const DEFAULT_GC_THRESHOLD: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ObjectRef(usize);
+
+#[derive(Debug)]
+struct Heap {
+    objects: Vec<Option<HeapObject>>,
+    free_slots: Vec<usize>,
+    allocations_since_gc: usize,
+    gc_threshold: usize,
+}
+
+#[derive(Debug)]
+struct HeapObject {
+    marked: bool,
+    kind: ObjectKind,
+}
+
+#[derive(Debug)]
+enum ObjectKind {
+    String(String),
+}
+
+impl Heap {
+    fn new() -> Self {
+        Self {
+            objects: Vec::new(),
+            free_slots: Vec::new(),
+            allocations_since_gc: 0,
+            gc_threshold: DEFAULT_GC_THRESHOLD,
+        }
+    }
+
+    fn allocate_string(&mut self, value: impl Into<String>) -> ObjectRef {
+        let object = HeapObject {
+            marked: false,
+            kind: ObjectKind::String(value.into()),
+        };
+        self.allocations_since_gc += 1;
+
+        if let Some(index) = self.free_slots.pop() {
+            self.objects[index] = Some(object);
+            return ObjectRef(index);
+        }
+
+        let reference = ObjectRef(self.objects.len());
+        self.objects.push(Some(object));
+        reference
+    }
+
+    fn string(&self, reference: ObjectRef) -> JayResult<&str> {
+        match self.object(reference)?.kind {
+            ObjectKind::String(ref value) => Ok(value),
+        }
+    }
+
+    fn should_collect(&self) -> bool {
+        self.allocations_since_gc >= self.gc_threshold
+    }
+
+    fn collect<'a, I>(&mut self, roots: I)
+    where
+        I: IntoIterator<Item = &'a Value>,
+    {
+        for root in roots {
+            if let Some(reference) = root.object_ref() {
+                self.mark(reference);
+            }
+        }
+
+        self.sweep();
+        self.allocations_since_gc = 0;
+    }
+
+    fn object(&self, reference: ObjectRef) -> JayResult<&HeapObject> {
+        self.objects
+            .get(reference.0)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| JayError::new(format!("invalid heap reference #{}", reference.0)))
+    }
+
+    fn mark(&mut self, reference: ObjectRef) {
+        let Some(Some(object)) = self.objects.get_mut(reference.0) else {
+            return;
+        };
+
+        object.marked = true;
+    }
+
+    fn sweep(&mut self) {
+        for (index, object) in self.objects.iter_mut().enumerate() {
+            let Some(heap_object) = object else {
+                continue;
+            };
+
+            if heap_object.marked {
+                heap_object.marked = false;
+            } else {
+                *object = None;
+                self.free_slots.push(index);
+            }
+        }
     }
 }
 
@@ -568,7 +710,7 @@ impl ValueType {
 enum Value {
     Uninitialized,
     Int(i32),
-    String(String),
+    Reference(ObjectRef),
     PrintStream,
 }
 
@@ -576,7 +718,7 @@ impl Value {
     fn value_type(&self) -> Option<ValueType> {
         match self {
             Value::Int(_) => Some(ValueType::Int),
-            Value::String(_) => Some(ValueType::String),
+            Value::Reference(_) => Some(ValueType::String),
             Value::Uninitialized | Value::PrintStream => None,
         }
     }
@@ -585,8 +727,15 @@ impl Value {
         match self {
             Value::Uninitialized => "uninitialized",
             Value::Int(_) => "int",
-            Value::String(_) => "String",
+            Value::Reference(_) => "String",
             Value::PrintStream => "PrintStream",
+        }
+    }
+
+    fn object_ref(&self) -> Option<ObjectRef> {
+        match self {
+            Value::Reference(reference) => Some(*reference),
+            Value::Uninitialized | Value::Int(_) | Value::PrintStream => None,
         }
     }
 }
@@ -688,6 +837,100 @@ fn int_compare_branch_taken(opcode: u8, left: i32, right: i32) -> JayResult<bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heap_allocates_and_resolves_string_objects() {
+        let mut heap = Heap::new();
+
+        let reference = heap.allocate_string("hello");
+
+        assert_eq!(heap.string(reference).unwrap(), "hello");
+    }
+
+    #[test]
+    fn garbage_collection_drops_unrooted_strings() {
+        let mut heap = Heap::new();
+        let dropped = heap.allocate_string("drop me");
+        let kept = heap.allocate_string("keep me");
+
+        let roots = [Value::Reference(kept)];
+        heap.collect(roots.iter());
+
+        assert!(heap.string(dropped).is_err());
+        assert_eq!(heap.string(kept).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn garbage_collection_keeps_frame_local_and_stack_references() {
+        let mut heap = Heap::new();
+        let local = heap.allocate_string("local");
+        let stack = heap.allocate_string("stack");
+        let dropped = heap.allocate_string("dropped");
+        let mut frame = Frame::new(1);
+        frame.locals[0] = Value::Reference(local);
+        frame.stack.push(Value::Reference(stack));
+
+        heap.collect(frame.roots());
+
+        assert_eq!(heap.string(local).unwrap(), "local");
+        assert_eq!(heap.string(stack).unwrap(), "stack");
+        assert!(heap.string(dropped).is_err());
+    }
+
+    #[test]
+    fn garbage_collection_reuses_freed_slots_without_moving_live_references() {
+        let mut heap = Heap::new();
+        let live = heap.allocate_string("live");
+        let dead = heap.allocate_string("dead");
+
+        let roots = [Value::Reference(live)];
+        heap.collect(roots.iter());
+        let reused = heap.allocate_string("reused");
+
+        assert_eq!(heap.string(live).unwrap(), "live");
+        assert_eq!(reused, dead);
+        assert_eq!(heap.string(reused).unwrap(), "reused");
+    }
+
+    #[test]
+    fn heap_requests_collection_at_default_threshold_and_resets_after_collecting() {
+        let mut heap = Heap::new();
+
+        for index in 0..DEFAULT_GC_THRESHOLD - 1 {
+            heap.allocate_string(format!("value {index}"));
+            assert!(!heap.should_collect());
+        }
+
+        heap.allocate_string("threshold");
+        assert!(heap.should_collect());
+
+        heap.collect(std::iter::empty::<&Value>());
+        assert!(!heap.should_collect());
+    }
+
+    #[test]
+    fn string_value_type_is_carried_by_references() {
+        let reference = ObjectRef(0);
+
+        assert_eq!(
+            Value::Reference(reference).value_type(),
+            Some(ValueType::String)
+        );
+    }
+
+    #[test]
+    fn string_type_errors_still_name_expected_string_values() {
+        let mut frame = Frame::new(0);
+        frame.stack.push(Value::Int(42));
+
+        let error = frame.pop_value_of_type(ValueType::String).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("expected string on stack, found Int(42)")
+        );
+    }
 
     #[test]
     fn branch_target_uses_opcode_pc_and_signed_offsets() {
