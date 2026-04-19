@@ -130,6 +130,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 }
                 0x3b..=0x3e => frame.store_int_local((opcode - 0x3b) as usize)?,
                 0x4b..=0x4e => frame.store_reference_local((opcode - 0x4b) as usize)?,
+                0x59 => frame.duplicate_top()?,
                 0x60 => {
                     let right = frame.pop_int()?;
                     let left = frame.pop_int()?;
@@ -188,9 +189,17 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.invoke_virtual(class_file, frame, index)?;
                 }
+                0xb7 => {
+                    let index = read_u2(&code.bytes, &mut pc)?;
+                    self.invoke_special(class_file, frame, index)?;
+                }
                 0xb8 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.invoke_static(class_file, frame, index)?;
+                }
+                0xbb => {
+                    let index = read_u2(&code.bytes, &mut pc)?;
+                    self.new_object(class_file, frame, index)?;
                 }
                 _ => {
                     return Err(JayError::new(format!(
@@ -201,6 +210,19 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
 
         Err(JayError::new("main method completed without return"))
+    }
+
+    fn new_object(
+        &mut self,
+        class_file: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let class_name = class_file.constant_pool.class_name(index)?;
+        let reference = self.heap.allocate_instance(class_name);
+        frame.stack.push(Value::Reference(reference));
+        self.collect_if_needed(frame);
+        Ok(())
     }
 
     fn load_constant(
@@ -258,7 +280,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         if method.class_name == "java/io/PrintStream" && method.name == "println" {
             return match method.descriptor {
                 "(Ljava/lang/String;)V" => {
-                    let reference = frame.pop_string_reference()?;
+                    let reference = frame.pop_string_reference(&self.heap)?;
                     frame.pop_print_stream()?;
                     let value = self.heap.string(reference)?;
                     writeln!(self.output, "{value}")?;
@@ -281,6 +303,94 @@ impl<'a, W: Write> Interpreter<'a, W> {
             "unsupported invokevirtual {}.{}{}",
             method.class_name, method.name, method.descriptor
         )))
+    }
+
+    fn invoke_special(
+        &mut self,
+        caller_class_file: &ClassFile,
+        caller: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let method_ref = caller_class_file.constant_pool.method_ref(index)?;
+        let target_class_name = method_ref.class_name.to_string();
+        let target_method_name = method_ref.name.to_string();
+        let target_descriptor = method_ref.descriptor.to_string();
+        let target_name = format!(
+            "{}.{}{}",
+            target_class_name.replace('/', "."),
+            target_method_name,
+            target_descriptor
+        );
+
+        if target_method_name != "<init>" {
+            return Err(JayError::new(format!(
+                "unsupported invokespecial target {target_name}"
+            )));
+        }
+
+        let descriptor = MethodDescriptor::parse(&target_descriptor)?;
+        if descriptor.return_type != ReturnType::Void {
+            return Err(JayError::new(format!(
+                "invokespecial constructor target {target_name} must return void"
+            )));
+        }
+
+        if target_class_name == "java/lang/Object" && target_descriptor == "()V" {
+            self.pop_constructor_arguments(caller, &descriptor)?;
+            let _receiver = caller.pop_reference()?;
+            return Ok(());
+        }
+
+        let loaded_class_file;
+        let target_class_file = if target_class_name == caller_class_file.this_class {
+            caller_class_file
+        } else {
+            let binary_name = target_class_name.replace('/', ".");
+            let bytes = self.classes.load_class_bytes(&binary_name)?;
+            loaded_class_file = ClassFile::parse(&bytes)?;
+            &loaded_class_file
+        };
+        let method = target_class_file
+            .find_method(&target_method_name, &target_descriptor)
+            .ok_or_else(|| {
+                JayError::new(format!("invokespecial target {target_name} not found"))
+            })?;
+
+        if method.is_static() {
+            return Err(JayError::new(format!(
+                "invokespecial constructor target {target_name} must not be static"
+            )));
+        }
+
+        if method.access_flags & 0x0100 != 0 || method.access_flags & 0x0400 != 0 {
+            return Err(JayError::new(format!(
+                "invokespecial constructor target {target_name} must not be native or abstract"
+            )));
+        }
+
+        let code = method
+            .code
+            .as_ref()
+            .ok_or_else(|| {
+                JayError::new(format!("invokespecial target {target_name} has no Code"))
+            })?
+            .clone();
+
+        let mut arguments = self.pop_constructor_arguments(caller, &descriptor)?;
+        let receiver = caller.pop_reference()?;
+        arguments.insert(0, receiver);
+
+        let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
+        self.saved_roots
+            .push(caller.roots().cloned().collect::<Vec<_>>());
+        let result = self.execute(target_class_file, &code, &mut callee);
+        self.saved_roots.pop();
+        match result? {
+            None => Ok(()),
+            Some(_) => Err(JayError::new(format!(
+                "invokespecial constructor target {target_name} returned a value"
+            ))),
+        }
     }
 
     fn invoke_static(
@@ -334,7 +444,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
 
         let mut arguments = Vec::with_capacity(descriptor.parameter_types.len());
         for parameter_type in descriptor.parameter_types.iter().rev() {
-            arguments.push(caller.pop_value_of_type(*parameter_type)?);
+            arguments.push(caller.pop_value_of_type(*parameter_type, &self.heap)?);
         }
         arguments.reverse();
 
@@ -350,14 +460,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 "invokestatic target {target_name} returned a value from void method"
             ))),
             (ReturnType::Type(return_type), Some(value))
-                if value.value_type() == Some(return_type) =>
+                if value.value_type(&self.heap)? == Some(return_type) =>
             {
                 caller.stack.push(value);
                 Ok(())
             }
             (ReturnType::Type(return_type), Some(other)) => Err(JayError::new(format!(
                 "invokestatic target {target_name} returned {}, expected {}",
-                other.type_name(),
+                other.type_name(&self.heap)?,
                 return_type.name()
             ))),
             (ReturnType::Type(return_type), None) => Err(JayError::new(format!(
@@ -365,6 +475,19 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 return_type.name()
             ))),
         }
+    }
+
+    fn pop_constructor_arguments(
+        &self,
+        caller: &mut Frame,
+        descriptor: &MethodDescriptor,
+    ) -> JayResult<Vec<Value>> {
+        let mut arguments = Vec::with_capacity(descriptor.parameter_types.len());
+        for parameter_type in descriptor.parameter_types.iter().rev() {
+            arguments.push(caller.pop_value_of_type(*parameter_type, &self.heap)?);
+        }
+        arguments.reverse();
+        Ok(arguments)
     }
 
     fn collect_if_needed(&mut self, current_frame: &Frame) {
@@ -441,6 +564,16 @@ impl Frame {
         Ok(())
     }
 
+    fn duplicate_top(&mut self) -> JayResult<()> {
+        let value = self
+            .stack
+            .last()
+            .cloned()
+            .ok_or_else(|| JayError::new("operand stack underflow on dup"))?;
+        self.stack.push(value);
+        Ok(())
+    }
+
     fn local_int(&self, index: usize) -> JayResult<i32> {
         match self.local_slot(index)? {
             Value::Int(value) => Ok(*value),
@@ -492,9 +625,12 @@ impl Frame {
         }
     }
 
-    fn pop_string_reference(&mut self) -> JayResult<ObjectRef> {
+    fn pop_string_reference(&mut self, heap: &Heap) -> JayResult<ObjectRef> {
         match self.pop()? {
-            Value::Reference(reference) => Ok(reference),
+            Value::Reference(reference) => {
+                let _ = heap.string(reference)?;
+                Ok(reference)
+            }
             other => Err(JayError::new(format!(
                 "expected string on stack, found {other:?}"
             ))),
@@ -519,10 +655,10 @@ impl Frame {
         }
     }
 
-    fn pop_value_of_type(&mut self, value_type: ValueType) -> JayResult<Value> {
+    fn pop_value_of_type(&mut self, value_type: ValueType, heap: &Heap) -> JayResult<Value> {
         match value_type {
             ValueType::Int => Ok(Value::Int(self.pop_int()?)),
-            ValueType::String => Ok(Value::Reference(self.pop_string_reference()?)),
+            ValueType::String => Ok(Value::Reference(self.pop_string_reference(heap)?)),
         }
     }
 
@@ -562,6 +698,7 @@ struct HeapObject {
 #[derive(Debug)]
 enum ObjectKind {
     String(String),
+    Instance { class_name: String },
 }
 
 impl Heap {
@@ -575,12 +712,21 @@ impl Heap {
     }
 
     fn allocate_string(&mut self, value: impl Into<String>) -> ObjectRef {
+        self.allocate(ObjectKind::String(value.into()))
+    }
+
+    fn allocate_instance(&mut self, class_name: impl Into<String>) -> ObjectRef {
+        self.allocate(ObjectKind::Instance {
+            class_name: class_name.into(),
+        })
+    }
+
+    fn allocate(&mut self, kind: ObjectKind) -> ObjectRef {
         let object = HeapObject {
             marked: false,
-            kind: ObjectKind::String(value.into()),
+            kind,
         };
         self.allocations_since_gc += 1;
-
         if let Some(index) = self.free_slots.pop() {
             self.objects[index] = Some(object);
             return ObjectRef(index);
@@ -594,6 +740,24 @@ impl Heap {
     fn string(&self, reference: ObjectRef) -> JayResult<&str> {
         match self.object(reference)?.kind {
             ObjectKind::String(ref value) => Ok(value),
+            ObjectKind::Instance { ref class_name } => Err(JayError::new(format!(
+                "expected String reference, found {}",
+                class_name.replace('/', ".")
+            ))),
+        }
+    }
+
+    fn value_type(&self, reference: ObjectRef) -> JayResult<Option<ValueType>> {
+        match self.object(reference)?.kind {
+            ObjectKind::String(_) => Ok(Some(ValueType::String)),
+            ObjectKind::Instance { .. } => Ok(None),
+        }
+    }
+
+    fn type_name(&self, reference: ObjectRef) -> JayResult<String> {
+        match self.object(reference)?.kind {
+            ObjectKind::String(_) => Ok("String".to_string()),
+            ObjectKind::Instance { ref class_name } => Ok(class_name.replace('/', ".")),
         }
     }
 
@@ -715,20 +879,20 @@ enum Value {
 }
 
 impl Value {
-    fn value_type(&self) -> Option<ValueType> {
+    fn value_type(&self, heap: &Heap) -> JayResult<Option<ValueType>> {
         match self {
-            Value::Int(_) => Some(ValueType::Int),
-            Value::Reference(_) => Some(ValueType::String),
-            Value::Uninitialized | Value::PrintStream => None,
+            Value::Int(_) => Ok(Some(ValueType::Int)),
+            Value::Reference(reference) => heap.value_type(*reference),
+            Value::Uninitialized | Value::PrintStream => Ok(None),
         }
     }
 
-    fn type_name(&self) -> &'static str {
+    fn type_name(&self, heap: &Heap) -> JayResult<String> {
         match self {
-            Value::Uninitialized => "uninitialized",
-            Value::Int(_) => "int",
-            Value::Reference(_) => "String",
-            Value::PrintStream => "PrintStream",
+            Value::Uninitialized => Ok("uninitialized".to_string()),
+            Value::Int(_) => Ok("int".to_string()),
+            Value::Reference(reference) => heap.type_name(*reference),
+            Value::PrintStream => Ok("PrintStream".to_string()),
         }
     }
 
@@ -848,6 +1012,22 @@ mod tests {
     }
 
     #[test]
+    fn heap_distinguishes_instance_objects_from_strings() {
+        let mut heap = Heap::new();
+
+        let reference = heap.allocate_instance("example/Empty");
+
+        assert_eq!(heap.value_type(reference).unwrap(), None);
+        assert_eq!(heap.type_name(reference).unwrap(), "example.Empty");
+        assert!(
+            heap.string(reference)
+                .unwrap_err()
+                .to_string()
+                .contains("expected String reference, found example.Empty")
+        );
+    }
+
+    #[test]
     fn garbage_collection_drops_unrooted_strings() {
         let mut heap = Heap::new();
         let dropped = heap.allocate_string("drop me");
@@ -910,20 +1090,24 @@ mod tests {
 
     #[test]
     fn string_value_type_is_carried_by_references() {
-        let reference = ObjectRef(0);
+        let mut heap = Heap::new();
+        let reference = heap.allocate_string("value");
 
         assert_eq!(
-            Value::Reference(reference).value_type(),
+            Value::Reference(reference).value_type(&heap).unwrap(),
             Some(ValueType::String)
         );
     }
 
     #[test]
     fn string_type_errors_still_name_expected_string_values() {
+        let heap = Heap::new();
         let mut frame = Frame::new(0);
         frame.stack.push(Value::Int(42));
 
-        let error = frame.pop_value_of_type(ValueType::String).unwrap_err();
+        let error = frame
+            .pop_value_of_type(ValueType::String, &heap)
+            .unwrap_err();
 
         assert!(
             error
