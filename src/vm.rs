@@ -28,6 +28,7 @@ impl Vm {
         let class_file = ClassFile::parse(&bytes)?;
         let main = class_file
             .find_method("main", "([Ljava/lang/String;)V")
+            .or_else(|| class_file.find_method("main", "()V"))
             .ok_or_else(|| JayError::new(format!("main method not found in {main_class}")))?;
 
         if !main.is_public() || !main.is_static() {

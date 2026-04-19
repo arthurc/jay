@@ -90,6 +90,56 @@ public class Main {
 }
 
 #[test]
+fn runs_no_argument_main_method() {
+    let root = temp_dir("no-argument-main");
+    compile_java(
+        &root,
+        "com/example/Main.java",
+        r#"
+package com.example;
+
+public class Main {
+    public static void main() {
+        System.out.println("Hello world!");
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "com.example.Main"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello world!\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn string_array_main_takes_precedence_over_no_argument_main() {
+    let root = temp_dir("main-overload-precedence");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("args");
+    }
+
+    public static void main() {
+        System.out.println("no args");
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "args\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn rejects_missing_cp() {
     let output = jay(&["HelloWorld"]);
 
