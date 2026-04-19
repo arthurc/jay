@@ -59,7 +59,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - JDK boot class lookup through `JAVA_HOME/lib/modules`
 - `public static void main(String[] args)` and `public static void main()`
 - `System.out.println(String)` and `System.out.println(int)`
-- Integer constants, locals, addition, subtraction, multiplication, division, and increment
+- Integer constants, local variables, addition, subtraction, multiplication, division, and increment
 - Integer comparisons, branches, and simple loops
 - Static method calls with `int` parameters and `int` or `void` return values
 - Same-class and cross-class static method calls

@@ -383,6 +383,38 @@ public class ArithmeticMain {
 }
 
 #[test]
+fn runs_integer_locals_beyond_compact_slots() {
+    let root = temp_dir("integer-locals-beyond-compact-slots");
+    compile_java(
+        &root,
+        "ManyLocalsMain.java",
+        r#"
+public class ManyLocalsMain {
+    public static void main(String[] args) {
+        int a = 1;
+        int b = 2;
+        int c = 3;
+        int d = 4;
+        int e = 5;
+        System.out.println(a + b + c + d + e);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "ManyLocalsMain"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "15\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_integer_multiplication() {
     let root = temp_dir("integer-multiplication");
     compile_java(
@@ -612,6 +644,37 @@ public class StaticVoidMain {
 
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "4\n4\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_static_int_method_with_more_than_four_arguments() {
+    let root = temp_dir("static-int-method-more-than-four-arguments");
+    compile_java(
+        &root,
+        "ManyArgsMain.java",
+        r#"
+public class ManyArgsMain {
+    static int sum(int a, int b, int c, int d, int e) {
+        return a + b + c + d + e;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(sum(1, 2, 3, 4, 5));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "ManyArgsMain"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "15\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
 
