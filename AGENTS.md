@@ -6,6 +6,8 @@ Update README.md when a change affects project setup, usage, behavior, supported
 
 Add documentation for new code.
 
+Split code into smaller modules when needed instead of keeping all code in one module.
+
 Implement changes in a red-green-refactor loop:
 
 1. Write or update a failing test that captures the desired behavior.

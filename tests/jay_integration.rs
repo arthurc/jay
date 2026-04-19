@@ -794,6 +794,66 @@ public class GcRootMain {
 }
 
 #[test]
+fn runs_simple_object_construction() {
+    let root = temp_dir("simple-object-construction");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Empty {
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Empty value = new Empty();
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_constructor_expression_statement() {
+    let root = temp_dir("constructor-expression-statement");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Empty {
+}
+
+public class Main {
+    public static void main(String[] args) {
+        new Empty();
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn reports_non_static_same_class_method_called_with_invokestatic() {
     let root = temp_dir("non-static-invokestatic");
     compile_java(
