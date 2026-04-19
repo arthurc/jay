@@ -42,7 +42,7 @@ impl Vm {
             .as_ref()
             .ok_or_else(|| JayError::new(format!("main method in {main_class} has no Code")))?;
 
-        Interpreter::new(&class_file, output).execute(code)
+        Interpreter::new(&class_file, output, code.max_locals).execute(code)
     }
 }
 
@@ -50,14 +50,16 @@ struct Interpreter<'a, W: Write> {
     class_file: &'a ClassFile,
     output: &'a mut W,
     stack: Vec<Value>,
+    locals: Vec<Value>,
 }
 
 impl<'a, W: Write> Interpreter<'a, W> {
-    fn new(class_file: &'a ClassFile, output: &'a mut W) -> Self {
+    fn new(class_file: &'a ClassFile, output: &'a mut W, max_locals: u16) -> Self {
         Self {
             class_file,
             output,
             stack: Vec::new(),
+            locals: vec![Value::Uninitialized; max_locals as usize],
         }
     }
 
@@ -90,6 +92,18 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 0x13 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.load_constant(index)?;
+                }
+                0x1b => self.load_int_local(1)?,
+                0x3c => self.store_int_local(1)?,
+                0x60 => {
+                    let right = self.pop_int()?;
+                    let left = self.pop_int()?;
+                    self.stack.push(Value::Int(left.wrapping_add(right)));
+                }
+                0x84 => {
+                    let index = read_u1(&code.bytes, &mut pc)? as usize;
+                    let value = read_u1(&code.bytes, &mut pc)? as i8 as i32;
+                    self.increment_int_local(index, value)?;
                 }
                 0xb1 => return Ok(()),
                 0xb2 => {
@@ -126,6 +140,56 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Err(JayError::new(format!(
             "unsupported ldc constant at pool index #{index}"
         )))
+    }
+
+    fn load_int_local(&mut self, index: usize) -> JayResult<()> {
+        let value = self.local_int(index)?;
+        self.stack.push(Value::Int(value));
+        Ok(())
+    }
+
+    fn store_int_local(&mut self, index: usize) -> JayResult<()> {
+        let value = self.pop_int()?;
+        let slot = self.local_slot_mut(index)?;
+        *slot = Value::Int(value);
+        Ok(())
+    }
+
+    fn increment_int_local(&mut self, index: usize, value: i32) -> JayResult<()> {
+        let current = self.local_int(index)?;
+        let slot = self.local_slot_mut(index)?;
+        *slot = Value::Int(current.wrapping_add(value));
+        Ok(())
+    }
+
+    fn local_int(&self, index: usize) -> JayResult<i32> {
+        match self.local_slot(index)? {
+            Value::Int(value) => Ok(*value),
+            Value::Uninitialized => Err(JayError::new(format!(
+                "local variable #{index} is uninitialized"
+            ))),
+            other => Err(JayError::new(format!(
+                "expected int in local variable #{index}, found {other:?}"
+            ))),
+        }
+    }
+
+    fn local_slot(&self, index: usize) -> JayResult<&Value> {
+        self.locals.get(index).ok_or_else(|| {
+            JayError::new(format!(
+                "invalid local variable index #{index}; max locals {}",
+                self.locals.len()
+            ))
+        })
+    }
+
+    fn local_slot_mut(&mut self, index: usize) -> JayResult<&mut Value> {
+        let max_locals = self.locals.len();
+        self.locals.get_mut(index).ok_or_else(|| {
+            JayError::new(format!(
+                "invalid local variable index #{index}; max locals {max_locals}"
+            ))
+        })
     }
 
     fn get_static(&mut self, index: u16) -> JayResult<()> {
@@ -209,6 +273,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Value {
+    Uninitialized,
     Int(i32),
     String(String),
     PrintStream,

@@ -202,6 +202,30 @@ fn falls_back_to_default_jimage_for_jdk_classes() {
 }
 
 #[test]
+fn runs_integer_locals_and_addition() {
+    let root = temp_dir("integer-locals-addition");
+    compile_java(
+        &root,
+        "ArithmeticMain.java",
+        r#"
+public class ArithmeticMain {
+    public static void main(String[] args) {
+        int x = 1;
+        x++;
+        System.out.println(x + 4);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "ArithmeticMain"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "6\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn reports_unsupported_bytecode() {
     let root = temp_dir("unsupported-bytecode");
     compile_java(
@@ -210,8 +234,9 @@ fn reports_unsupported_bytecode() {
         r#"
 public class UnsupportedMain {
     public static void main(String[] args) {
-        int x = 1;
-        x++;
+        int x = 2;
+        int y = 3;
+        System.out.println(x * y);
     }
 }
 "#,
