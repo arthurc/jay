@@ -42,93 +42,98 @@ impl Vm {
             .as_ref()
             .ok_or_else(|| JayError::new(format!("main method in {main_class} has no Code")))?;
 
-        Interpreter::new(&class_file, output, code.max_locals).execute(code)
+        let mut interpreter = Interpreter::new(&class_file, output);
+        let mut frame = Frame::new(code.max_locals);
+        match interpreter.execute(code, &mut frame)? {
+            None => Ok(()),
+            Some(_) => Err(JayError::new(format!(
+                "main method in {main_class} returned a value"
+            ))),
+        }
     }
 }
 
 struct Interpreter<'a, W: Write> {
     class_file: &'a ClassFile,
     output: &'a mut W,
+}
+
+struct Frame {
     stack: Vec<Value>,
     locals: Vec<Value>,
 }
 
 impl<'a, W: Write> Interpreter<'a, W> {
-    fn new(class_file: &'a ClassFile, output: &'a mut W, max_locals: u16) -> Self {
-        Self {
-            class_file,
-            output,
-            stack: Vec::new(),
-            locals: vec![Value::Uninitialized; max_locals as usize],
-        }
+    fn new(class_file: &'a ClassFile, output: &'a mut W) -> Self {
+        Self { class_file, output }
     }
 
-    fn execute(&mut self, code: &Code) -> JayResult<()> {
+    fn execute(&mut self, code: &Code, frame: &mut Frame) -> JayResult<Option<Value>> {
         let mut pc = 0usize;
         while pc < code.bytes.len() {
             let opcode_pc = pc;
             let opcode = read_u1(&code.bytes, &mut pc)?;
             match opcode {
                 0x00 => {}
-                0x02 => self.stack.push(Value::Int(-1)),
-                0x03 => self.stack.push(Value::Int(0)),
-                0x04 => self.stack.push(Value::Int(1)),
-                0x05 => self.stack.push(Value::Int(2)),
-                0x06 => self.stack.push(Value::Int(3)),
-                0x07 => self.stack.push(Value::Int(4)),
-                0x08 => self.stack.push(Value::Int(5)),
+                0x02 => frame.stack.push(Value::Int(-1)),
+                0x03 => frame.stack.push(Value::Int(0)),
+                0x04 => frame.stack.push(Value::Int(1)),
+                0x05 => frame.stack.push(Value::Int(2)),
+                0x06 => frame.stack.push(Value::Int(3)),
+                0x07 => frame.stack.push(Value::Int(4)),
+                0x08 => frame.stack.push(Value::Int(5)),
                 0x10 => {
                     let value = read_u1(&code.bytes, &mut pc)? as i8 as i32;
-                    self.stack.push(Value::Int(value));
+                    frame.stack.push(Value::Int(value));
                 }
                 0x11 => {
                     let value = read_u2(&code.bytes, &mut pc)? as i16 as i32;
-                    self.stack.push(Value::Int(value));
+                    frame.stack.push(Value::Int(value));
                 }
                 0x12 => {
                     let index = read_u1(&code.bytes, &mut pc)? as u16;
-                    self.load_constant(index)?;
+                    self.load_constant(frame, index)?;
                 }
                 0x13 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
-                    self.load_constant(index)?;
+                    self.load_constant(frame, index)?;
                 }
-                0x1a..=0x1d => self.load_int_local((opcode - 0x1a) as usize)?,
-                0x3b..=0x3e => self.store_int_local((opcode - 0x3b) as usize)?,
+                0x1a..=0x1d => frame.load_int_local((opcode - 0x1a) as usize)?,
+                0x3b..=0x3e => frame.store_int_local((opcode - 0x3b) as usize)?,
                 0x60 => {
-                    let right = self.pop_int()?;
-                    let left = self.pop_int()?;
-                    self.stack.push(Value::Int(left.wrapping_add(right)));
+                    let right = frame.pop_int()?;
+                    let left = frame.pop_int()?;
+                    frame.stack.push(Value::Int(left.wrapping_add(right)));
                 }
                 0x68 => {
-                    let right = self.pop_int()?;
-                    let left = self.pop_int()?;
-                    self.stack.push(Value::Int(left.wrapping_mul(right)));
+                    let right = frame.pop_int()?;
+                    let left = frame.pop_int()?;
+                    frame.stack.push(Value::Int(left.wrapping_mul(right)));
                 }
                 0x6c => {
-                    let right = self.pop_int()?;
-                    let left = self.pop_int()?;
+                    let right = frame.pop_int()?;
+                    let left = frame.pop_int()?;
                     if right == 0 {
                         return Err(JayError::new("integer division by zero"));
                     }
-                    self.stack.push(Value::Int(left.wrapping_div(right)));
+                    frame.stack.push(Value::Int(left.wrapping_div(right)));
                 }
                 0x84 => {
                     let index = read_u1(&code.bytes, &mut pc)? as usize;
                     let value = read_u1(&code.bytes, &mut pc)? as i8 as i32;
-                    self.increment_int_local(index, value)?;
+                    frame.increment_int_local(index, value)?;
                 }
                 0x99..=0x9e => {
                     let offset = read_i2(&code.bytes, &mut pc)?;
-                    let value = self.pop_int()?;
+                    let value = frame.pop_int()?;
                     if int_branch_taken(opcode, value)? {
                         pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
                     }
                 }
                 0x9f..=0xa4 => {
                     let offset = read_i2(&code.bytes, &mut pc)?;
-                    let right = self.pop_int()?;
-                    let left = self.pop_int()?;
+                    let right = frame.pop_int()?;
+                    let left = frame.pop_int()?;
                     if int_compare_branch_taken(opcode, left, right)? {
                         pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
                     }
@@ -137,14 +142,19 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let offset = read_i2(&code.bytes, &mut pc)?;
                     pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
                 }
-                0xb1 => return Ok(()),
+                0xac => return Ok(Some(Value::Int(frame.pop_int()?))),
+                0xb1 => return Ok(None),
                 0xb2 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
-                    self.get_static(index)?;
+                    self.get_static(frame, index)?;
                 }
                 0xb6 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
-                    self.invoke_virtual(index)?;
+                    self.invoke_virtual(frame, index)?;
+                }
+                0xb8 => {
+                    let index = read_u2(&code.bytes, &mut pc)?;
+                    self.invoke_static(frame, index)?;
                 }
                 _ => {
                     return Err(JayError::new(format!(
@@ -157,21 +167,157 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Err(JayError::new("main method completed without return"))
     }
 
-    fn load_constant(&mut self, index: u16) -> JayResult<()> {
+    fn load_constant(&mut self, frame: &mut Frame, index: u16) -> JayResult<()> {
         let constant_pool = &self.class_file.constant_pool;
         if let Ok(value) = constant_pool.string(index) {
-            self.stack.push(Value::String(value.to_string()));
+            frame.stack.push(Value::String(value.to_string()));
             return Ok(());
         }
 
         if let Ok(value) = constant_pool.integer(index) {
-            self.stack.push(Value::Int(value));
+            frame.stack.push(Value::Int(value));
             return Ok(());
         }
 
         Err(JayError::new(format!(
             "unsupported ldc constant at pool index #{index}"
         )))
+    }
+
+    fn get_static(&mut self, frame: &mut Frame, index: u16) -> JayResult<()> {
+        let field = self.class_file.constant_pool.field_ref(index)?;
+        if field.class_name == "java/lang/System"
+            && field.name == "out"
+            && field.descriptor == "Ljava/io/PrintStream;"
+        {
+            frame.stack.push(Value::PrintStream);
+            Ok(())
+        } else {
+            Err(JayError::new(format!(
+                "unsupported getstatic {}.{}:{}",
+                field.class_name, field.name, field.descriptor
+            )))
+        }
+    }
+
+    fn invoke_virtual(&mut self, frame: &mut Frame, index: u16) -> JayResult<()> {
+        let method = self.class_file.constant_pool.method_ref(index)?;
+        if method.class_name == "java/io/PrintStream" && method.name == "println" {
+            return match method.descriptor {
+                "(Ljava/lang/String;)V" => {
+                    let value = frame.pop_string()?;
+                    frame.pop_print_stream()?;
+                    writeln!(self.output, "{value}")?;
+                    Ok(())
+                }
+                "(I)V" => {
+                    let value = frame.pop_int()?;
+                    frame.pop_print_stream()?;
+                    writeln!(self.output, "{value}")?;
+                    Ok(())
+                }
+                _ => Err(JayError::new(format!(
+                    "unsupported PrintStream.println descriptor {}",
+                    method.descriptor
+                ))),
+            };
+        }
+
+        Err(JayError::new(format!(
+            "unsupported invokevirtual {}.{}{}",
+            method.class_name, method.name, method.descriptor
+        )))
+    }
+
+    fn invoke_static(&mut self, caller: &mut Frame, index: u16) -> JayResult<()> {
+        let method_ref = self.class_file.constant_pool.method_ref(index)?;
+        let target_name = format!(
+            "{}.{}{}",
+            method_ref.class_name.replace('/', "."),
+            method_ref.name,
+            method_ref.descriptor
+        );
+
+        if method_ref.class_name != self.class_file.this_class {
+            return Err(JayError::new(format!(
+                "unsupported invokestatic {target_name}"
+            )));
+        }
+
+        let descriptor = MethodDescriptor::parse(method_ref.descriptor)?;
+        let method = self
+            .class_file
+            .find_method(method_ref.name, method_ref.descriptor)
+            .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} not found")))?;
+
+        if !method.is_static() {
+            return Err(JayError::new(format!(
+                "invokestatic target {target_name} must be static"
+            )));
+        }
+
+        if method.access_flags & 0x0100 != 0 || method.access_flags & 0x0400 != 0 {
+            return Err(JayError::new(format!(
+                "invokestatic target {target_name} must not be native or abstract"
+            )));
+        }
+
+        let code = method
+            .code
+            .as_ref()
+            .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} has no Code")))?
+            .clone();
+
+        let mut arguments = Vec::with_capacity(descriptor.parameter_count);
+        for _ in 0..descriptor.parameter_count {
+            arguments.push(Value::Int(caller.pop_int()?));
+        }
+        arguments.reverse();
+
+        let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
+        let result = self.execute(&code, &mut callee)?;
+        match (descriptor.return_type, result) {
+            (ReturnType::Void, None) => Ok(()),
+            (ReturnType::Void, Some(_)) => Err(JayError::new(format!(
+                "invokestatic target {target_name} returned a value from void method"
+            ))),
+            (ReturnType::Int, Some(Value::Int(value))) => {
+                caller.stack.push(Value::Int(value));
+                Ok(())
+            }
+            (ReturnType::Int, Some(other)) => Err(JayError::new(format!(
+                "invokestatic target {target_name} returned non-int value {other:?}"
+            ))),
+            (ReturnType::Int, None) => Err(JayError::new(format!(
+                "invokestatic target {target_name} returned void from int method"
+            ))),
+        }
+    }
+}
+
+impl Frame {
+    fn new(max_locals: u16) -> Self {
+        Self {
+            stack: Vec::new(),
+            locals: vec![Value::Uninitialized; max_locals as usize],
+        }
+    }
+
+    fn with_arguments(max_locals: u16, arguments: Vec<Value>) -> JayResult<Self> {
+        let mut frame = Self::new(max_locals);
+        if arguments.len() > frame.locals.len() {
+            return Err(JayError::new(format!(
+                "method expects {} argument locals but max locals is {}",
+                arguments.len(),
+                frame.locals.len()
+            )));
+        }
+
+        for (index, value) in arguments.into_iter().enumerate() {
+            frame.locals[index] = value;
+        }
+
+        Ok(frame)
     }
 
     fn load_int_local(&mut self, index: usize) -> JayResult<()> {
@@ -224,51 +370,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
         })
     }
 
-    fn get_static(&mut self, index: u16) -> JayResult<()> {
-        let field = self.class_file.constant_pool.field_ref(index)?;
-        if field.class_name == "java/lang/System"
-            && field.name == "out"
-            && field.descriptor == "Ljava/io/PrintStream;"
-        {
-            self.stack.push(Value::PrintStream);
-            Ok(())
-        } else {
-            Err(JayError::new(format!(
-                "unsupported getstatic {}.{}:{}",
-                field.class_name, field.name, field.descriptor
-            )))
-        }
-    }
-
-    fn invoke_virtual(&mut self, index: u16) -> JayResult<()> {
-        let method = self.class_file.constant_pool.method_ref(index)?;
-        if method.class_name == "java/io/PrintStream" && method.name == "println" {
-            return match method.descriptor {
-                "(Ljava/lang/String;)V" => {
-                    let value = self.pop_string()?;
-                    self.pop_print_stream()?;
-                    writeln!(self.output, "{value}")?;
-                    Ok(())
-                }
-                "(I)V" => {
-                    let value = self.pop_int()?;
-                    self.pop_print_stream()?;
-                    writeln!(self.output, "{value}")?;
-                    Ok(())
-                }
-                _ => Err(JayError::new(format!(
-                    "unsupported PrintStream.println descriptor {}",
-                    method.descriptor
-                ))),
-            };
-        }
-
-        Err(JayError::new(format!(
-            "unsupported invokevirtual {}.{}{}",
-            method.class_name, method.name, method.descriptor
-        )))
-    }
-
     fn pop_print_stream(&mut self) -> JayResult<()> {
         match self.pop()? {
             Value::PrintStream => Ok(()),
@@ -301,6 +402,58 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .pop()
             .ok_or_else(|| JayError::new("operand stack underflow"))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MethodDescriptor {
+    parameter_count: usize,
+    return_type: ReturnType,
+}
+
+impl MethodDescriptor {
+    fn parse(descriptor: &str) -> JayResult<Self> {
+        let Some(parameters) = descriptor.strip_prefix('(') else {
+            return Err(JayError::new(format!(
+                "invalid method descriptor {descriptor}"
+            )));
+        };
+        let Some((parameters, return_type)) = parameters.split_once(')') else {
+            return Err(JayError::new(format!(
+                "invalid method descriptor {descriptor}"
+            )));
+        };
+
+        let mut parameter_count = 0;
+        for parameter in parameters.chars() {
+            if parameter != 'I' {
+                return Err(JayError::new(format!(
+                    "unsupported method descriptor parameter {parameter} in {descriptor}"
+                )));
+            }
+            parameter_count += 1;
+        }
+
+        let return_type = match return_type {
+            "I" => ReturnType::Int,
+            "V" => ReturnType::Void,
+            _ => {
+                return Err(JayError::new(format!(
+                    "unsupported method descriptor return type {return_type} in {descriptor}"
+                )));
+            }
+        };
+
+        Ok(Self {
+            parameter_count,
+            return_type,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReturnType {
+    Int,
+    Void,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,5 +591,32 @@ mod tests {
         assert!(int_compare_branch_taken(0xa4, 2, 3).unwrap());
         assert!(int_compare_branch_taken(0xa4, 2, 2).unwrap());
         assert!(!int_compare_branch_taken(0xa4, 3, 2).unwrap());
+    }
+
+    #[test]
+    fn parses_int_returning_method_descriptors() {
+        let descriptor = MethodDescriptor::parse("(II)I").unwrap();
+
+        assert_eq!(descriptor.parameter_count, 2);
+        assert_eq!(descriptor.return_type, ReturnType::Int);
+    }
+
+    #[test]
+    fn parses_void_method_descriptors() {
+        let descriptor = MethodDescriptor::parse("(I)V").unwrap();
+
+        assert_eq!(descriptor.parameter_count, 1);
+        assert_eq!(descriptor.return_type, ReturnType::Void);
+    }
+
+    #[test]
+    fn rejects_unsupported_method_descriptors() {
+        let error = MethodDescriptor::parse("(Ljava/lang/String;)V").unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported method descriptor parameter")
+        );
     }
 }
