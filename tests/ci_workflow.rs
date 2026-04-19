@@ -11,7 +11,7 @@ fn github_ci_runs_project_checks() {
         "name: CI",
         "runs-on: ubuntu-latest",
         "actions/checkout@v4",
-        "actions/setup-java@v4",
+        "actions/setup-java@v5",
         "java-version: '21'",
         "rustup toolchain install stable --profile minimal --component rustfmt,clippy",
         "cargo fmt --all --check",
