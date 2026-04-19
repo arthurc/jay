@@ -679,6 +679,77 @@ public class ManyArgsMain {
 }
 
 #[test]
+fn runs_static_string_method_return_and_parameter() {
+    let root = temp_dir("static-string-method-return-parameter");
+    compile_java(
+        &root,
+        "StaticStringMain.java",
+        r#"
+public class StaticStringMain {
+    static String message() {
+        return "hello";
+    }
+
+    static void print(String value) {
+        System.out.println(value);
+    }
+
+    public static void main(String[] args) {
+        print(message());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "StaticStringMain"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_static_string_return_stored_in_local() {
+    let root = temp_dir("static-string-return-local");
+    compile_java(
+        &root,
+        "StaticStringLocalMain.java",
+        r#"
+public class StaticStringLocalMain {
+    static String message() {
+        return "local";
+    }
+
+    static void print(String value) {
+        System.out.println(value);
+    }
+
+    public static void main(String[] args) {
+        String value = message();
+        print(value);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "StaticStringLocalMain"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "local\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn reports_non_static_same_class_method_called_with_invokestatic() {
     let root = temp_dir("non-static-invokestatic");
     compile_java(

@@ -61,7 +61,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - `System.out.println(String)` and `System.out.println(int)`
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
 - Integer comparisons, branches, and simple loops
-- Static method calls with `int` parameters and `int` or `void` return values
+- Static method calls with `int` and `String` parameters and `int`, `String`, or `void` return values
 - Same-class and cross-class static method calls
 - Class files up to the parser's supported class file version range
 
