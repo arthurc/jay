@@ -824,6 +824,49 @@ public class Main {
 }
 
 #[test]
+fn runs_instance_field_assignments() {
+    let root = temp_dir("instance-field-assignments");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Car {
+    String make;
+    int year;
+
+    Car(String make, int year) {
+        this.make = make;
+        this.year = year;
+    }
+}
+
+class Garage {
+    Car car;
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Car car = new Car("Toyota", 2020);
+        Garage garage = new Garage();
+        garage.car = car;
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_constructor_expression_statement() {
     let root = temp_dir("constructor-expression-statement");
     compile_java(
