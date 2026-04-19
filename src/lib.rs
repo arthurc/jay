@@ -1,6 +1,7 @@
 pub mod classfile;
 pub mod classpath;
 pub mod cli;
+pub mod jimage;
 pub mod vm;
 
 use std::fmt;

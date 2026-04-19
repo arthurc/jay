@@ -1,5 +1,9 @@
 use crate::{JayError, JayResult};
 
+const MIN_SUPPORTED_MAJOR_VERSION: u16 = 45;
+const MAX_SUPPORTED_MAJOR_VERSION: u16 = 69;
+const MAX_SUPPORTED_JAVA_VERSION: u16 = 25;
+
 #[derive(Debug, Clone)]
 pub struct ClassFile {
     pub minor_version: u16,
@@ -205,9 +209,9 @@ impl<'a> Parser<'a> {
 
         let minor_version = self.read_u2()?;
         let major_version = self.read_u2()?;
-        if !(45..=65).contains(&major_version) {
+        if !(MIN_SUPPORTED_MAJOR_VERSION..=MAX_SUPPORTED_MAJOR_VERSION).contains(&major_version) {
             return Err(JayError::new(format!(
-                "unsupported class file major version {major_version}; expected Java 21 or older"
+                "unsupported class file major version {major_version}; expected Java {MAX_SUPPORTED_JAVA_VERSION} or older"
             )));
         }
 
@@ -474,5 +478,31 @@ mod tests {
         let error = ClassFile::parse(&[0xCA, 0xFE, 0xBA, 0xBE]).unwrap_err();
 
         assert!(error.to_string().contains("unexpected end"));
+    }
+
+    #[test]
+    fn accepts_java_25_class_file_major_version() {
+        let bytes = [
+            0xCA, 0xFE, 0xBA, 0xBE, // magic
+            0x00, 0x00, // minor
+            0x00, 0x45, // major 69
+            0x00, 0x05, // constant_pool_count
+            0x07, 0x00, 0x02, // #1 Class #2
+            0x01, 0x00, 0x05, b'E', b'm', b'p', b't', b'y', // #2 Utf8 Empty
+            0x07, 0x00, 0x04, // #3 Class #4
+            0x01, 0x00, 0x10, b'j', b'a', b'v', b'a', b'/', b'l', b'a', b'n', b'g', b'/', b'O',
+            b'b', b'j', b'e', b'c', b't', // #4 Utf8 java/lang/Object
+            0x00, 0x21, // access_flags
+            0x00, 0x01, // this_class
+            0x00, 0x03, // super_class
+            0x00, 0x00, // interfaces_count
+            0x00, 0x00, // fields_count
+            0x00, 0x00, // methods_count
+            0x00, 0x00, // attributes_count
+        ];
+
+        let class_file = ClassFile::parse(&bytes).unwrap();
+
+        assert_eq!(class_file.major_version, 69);
     }
 }

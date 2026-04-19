@@ -137,6 +137,21 @@ public class NoMain {
 }
 
 #[test]
+fn falls_back_to_default_jimage_for_jdk_classes() {
+    let root = temp_dir("jimage-fallback");
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "java.lang.Object"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("main method not found"), "{stderr}");
+    assert!(
+        !stderr.contains("could not read class java.lang.Object"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn reports_unsupported_bytecode() {
     let root = temp_dir("unsupported-bytecode");
     compile_java(

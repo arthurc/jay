@@ -16,5 +16,5 @@ fn main() -> ExitCode {
 
 fn run() -> jay::JayResult<()> {
     let config = cli::parse_args(env::args().skip(1))?;
-    Vm::new(config.classpath).run_main(&config.main_class)
+    Vm::new(config.classpath)?.run_main(&config.main_class)
 }

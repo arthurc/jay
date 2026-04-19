@@ -2,17 +2,19 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crate::classfile::{ClassFile, Code};
-use crate::classpath;
+use crate::classpath::ClassResolver;
 use crate::{JayError, JayResult};
 
 #[derive(Debug, Clone)]
 pub struct Vm {
-    classpath: PathBuf,
+    classes: ClassResolver,
 }
 
 impl Vm {
-    pub fn new(classpath: PathBuf) -> Self {
-        Self { classpath }
+    pub fn new(classpath: PathBuf) -> JayResult<Self> {
+        Ok(Self {
+            classes: ClassResolver::new(classpath)?,
+        })
     }
 
     pub fn run_main(&self, main_class: &str) -> JayResult<()> {
@@ -22,7 +24,7 @@ impl Vm {
     }
 
     pub fn run_main_to_writer<W: Write>(&self, main_class: &str, output: &mut W) -> JayResult<()> {
-        let bytes = classpath::load_class_bytes(&self.classpath, main_class)?;
+        let bytes = self.classes.load_class_bytes(main_class)?;
         let class_file = ClassFile::parse(&bytes)?;
         let main = class_file
             .find_method("main", "([Ljava/lang/String;)V")
