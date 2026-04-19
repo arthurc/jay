@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -188,6 +189,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.get_static(class_file, frame, index)?;
                 }
+                0xb5 => {
+                    let index = read_u2(&code.bytes, &mut pc)?;
+                    self.put_field(class_file, frame, index)?;
+                }
                 0xb6 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.invoke_virtual(class_file, frame, index)?;
@@ -271,6 +276,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 field.class_name, field.name, field.descriptor
             )))
         }
+    }
+
+    fn put_field(
+        &mut self,
+        class_file: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let field = class_file.constant_pool.field_ref(index)?;
+        let field_type = parse_field_descriptor(field.descriptor)?;
+        let value = frame.pop_field_value(field_type)?;
+        let receiver = frame.pop_object_ref()?;
+        let field_key = FieldKey::new(field.class_name, field.name, field.descriptor);
+        self.heap.put_instance_field(receiver, field_key, value)
     }
 
     fn invoke_virtual(
@@ -649,6 +668,15 @@ impl Frame {
         }
     }
 
+    fn pop_object_ref(&mut self) -> JayResult<ObjectRef> {
+        match self.pop_reference()? {
+            Value::Reference(reference) => Ok(reference),
+            other => Err(JayError::new(format!(
+                "expected reference on stack, found {other:?}"
+            ))),
+        }
+    }
+
     fn pop_reference(&mut self) -> JayResult<Value> {
         match self.pop()? {
             value @ Value::Reference(_) => Ok(value),
@@ -662,6 +690,13 @@ impl Frame {
         match value_type {
             ValueType::Int => Ok(Value::Int(self.pop_int()?)),
             ValueType::String => Ok(Value::Reference(self.pop_string_reference(heap)?)),
+        }
+    }
+
+    fn pop_field_value(&mut self, field_type: FieldType) -> JayResult<Value> {
+        match field_type {
+            FieldType::Int => Ok(Value::Int(self.pop_int()?)),
+            FieldType::Reference => self.pop_reference(),
         }
     }
 
@@ -701,7 +736,32 @@ struct HeapObject {
 #[derive(Debug)]
 enum ObjectKind {
     String(String),
-    Instance { class_name: String },
+    Instance {
+        class_name: String,
+        fields: HashMap<FieldKey, Value>,
+    },
+}
+
+/// Identifies an instance field exactly as it appears in a class constant pool.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FieldKey {
+    class_name: String,
+    name: String,
+    descriptor: String,
+}
+
+impl FieldKey {
+    fn new(
+        class_name: impl Into<String>,
+        name: impl Into<String>,
+        descriptor: impl Into<String>,
+    ) -> Self {
+        Self {
+            class_name: class_name.into(),
+            name: name.into(),
+            descriptor: descriptor.into(),
+        }
+    }
 }
 
 impl Heap {
@@ -721,6 +781,7 @@ impl Heap {
     fn allocate_instance(&mut self, class_name: impl Into<String>) -> ObjectRef {
         self.allocate(ObjectKind::Instance {
             class_name: class_name.into(),
+            fields: HashMap::new(),
         })
     }
 
@@ -743,7 +804,7 @@ impl Heap {
     fn string(&self, reference: ObjectRef) -> JayResult<&str> {
         match self.object(reference)?.kind {
             ObjectKind::String(ref value) => Ok(value),
-            ObjectKind::Instance { ref class_name } => Err(JayError::new(format!(
+            ObjectKind::Instance { ref class_name, .. } => Err(JayError::new(format!(
                 "expected String reference, found {}",
                 class_name.replace('/', ".")
             ))),
@@ -760,7 +821,34 @@ impl Heap {
     fn type_name(&self, reference: ObjectRef) -> JayResult<String> {
         match self.object(reference)?.kind {
             ObjectKind::String(_) => Ok("String".to_string()),
-            ObjectKind::Instance { ref class_name } => Ok(class_name.replace('/', ".")),
+            ObjectKind::Instance { ref class_name, .. } => Ok(class_name.replace('/', ".")),
+        }
+    }
+
+    fn put_instance_field(
+        &mut self,
+        reference: ObjectRef,
+        field: FieldKey,
+        value: Value,
+    ) -> JayResult<()> {
+        match self.object_mut(reference)?.kind {
+            ObjectKind::Instance { ref mut fields, .. } => {
+                fields.insert(field, value);
+                Ok(())
+            }
+            ObjectKind::String(_) => Err(JayError::new(
+                "expected instance reference for putfield, found String",
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    fn instance_field(&self, reference: ObjectRef, field: &FieldKey) -> JayResult<Option<&Value>> {
+        match self.object(reference)?.kind {
+            ObjectKind::Instance { ref fields, .. } => Ok(fields.get(field)),
+            ObjectKind::String(_) => Err(JayError::new(
+                "expected instance reference for field lookup, found String",
+            )),
         }
     }
 
@@ -789,12 +877,36 @@ impl Heap {
             .ok_or_else(|| JayError::new(format!("invalid heap reference #{}", reference.0)))
     }
 
+    fn object_mut(&mut self, reference: ObjectRef) -> JayResult<&mut HeapObject> {
+        self.objects
+            .get_mut(reference.0)
+            .and_then(Option::as_mut)
+            .ok_or_else(|| JayError::new(format!("invalid heap reference #{}", reference.0)))
+    }
+
     fn mark(&mut self, reference: ObjectRef) {
-        let Some(Some(object)) = self.objects.get_mut(reference.0) else {
-            return;
+        let field_references = {
+            let Some(Some(object)) = self.objects.get_mut(reference.0) else {
+                return;
+            };
+
+            if object.marked {
+                return;
+            }
+
+            object.marked = true;
+            match object.kind {
+                ObjectKind::String(_) => Vec::new(),
+                ObjectKind::Instance { ref fields, .. } => fields
+                    .values()
+                    .filter_map(Value::object_ref)
+                    .collect::<Vec<_>>(),
+            }
         };
 
-        object.marked = true;
+        for field_reference in field_references {
+            self.mark(field_reference);
+        }
     }
 
     fn sweep(&mut self) {
@@ -864,6 +976,12 @@ enum ValueType {
     String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldType {
+    Int,
+    Reference,
+}
+
 impl ValueType {
     fn name(self) -> &'static str {
         match self {
@@ -915,6 +1033,26 @@ fn parse_complete_value_type(input: &str, descriptor: &str) -> JayResult<ValueTy
         )));
     }
     Ok(value_type)
+}
+
+fn parse_field_descriptor(descriptor: &str) -> JayResult<FieldType> {
+    if descriptor == "I" {
+        return Ok(FieldType::Int);
+    }
+
+    if descriptor.starts_with('L') && descriptor.ends_with(';') && descriptor.len() > 2 {
+        return Ok(FieldType::Reference);
+    }
+
+    if descriptor.starts_with('[') {
+        return Err(JayError::new(format!(
+            "unsupported array field descriptor {descriptor}"
+        )));
+    }
+
+    Err(JayError::new(format!(
+        "unsupported field descriptor {descriptor}"
+    )))
 }
 
 fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueType, &'a str)> {
@@ -1031,6 +1169,46 @@ mod tests {
     }
 
     #[test]
+    fn heap_stores_instance_fields_by_owner_name_and_descriptor() {
+        let mut heap = Heap::new();
+        let instance = heap.allocate_instance("example/Car");
+        let year = FieldKey::new("example/Car", "year", "I");
+        let make = FieldKey::new("example/Car", "make", "Ljava/lang/String;");
+        let make_value = heap.allocate_string("Toyota");
+
+        heap.put_instance_field(instance, year.clone(), Value::Int(2020))
+            .unwrap();
+        heap.put_instance_field(instance, make.clone(), Value::Reference(make_value))
+            .unwrap();
+
+        assert_eq!(
+            heap.instance_field(instance, &year).unwrap(),
+            Some(&Value::Int(2020))
+        );
+        assert_eq!(
+            heap.instance_field(instance, &make).unwrap(),
+            Some(&Value::Reference(make_value))
+        );
+    }
+
+    #[test]
+    fn heap_rejects_field_writes_to_non_instance_references() {
+        let mut heap = Heap::new();
+        let string = heap.allocate_string("not an instance");
+        let field = FieldKey::new("example/Car", "year", "I");
+
+        let error = heap
+            .put_instance_field(string, field, Value::Int(2020))
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("expected instance reference for putfield")
+        );
+    }
+
+    #[test]
     fn garbage_collection_drops_unrooted_strings() {
         let mut heap = Heap::new();
         let dropped = heap.allocate_string("drop me");
@@ -1057,6 +1235,44 @@ mod tests {
 
         assert_eq!(heap.string(local).unwrap(), "local");
         assert_eq!(heap.string(stack).unwrap(), "stack");
+        assert!(heap.string(dropped).is_err());
+    }
+
+    #[test]
+    fn garbage_collection_keeps_references_stored_in_reachable_instance_fields() {
+        let mut heap = Heap::new();
+        let instance = heap.allocate_instance("example/Car");
+        let kept = heap.allocate_string("keep me");
+        let dropped = heap.allocate_string("drop me");
+        let field = FieldKey::new("example/Car", "make", "Ljava/lang/String;");
+        heap.put_instance_field(instance, field, Value::Reference(kept))
+            .unwrap();
+
+        let roots = [Value::Reference(instance)];
+        heap.collect(roots.iter());
+
+        assert_eq!(heap.string(kept).unwrap(), "keep me");
+        assert!(heap.string(dropped).is_err());
+    }
+
+    #[test]
+    fn garbage_collection_marks_instance_fields_recursively() {
+        let mut heap = Heap::new();
+        let root = heap.allocate_instance("example/Root");
+        let child = heap.allocate_instance("example/Child");
+        let kept = heap.allocate_string("nested");
+        let dropped = heap.allocate_string("drop me");
+        let child_field = FieldKey::new("example/Root", "child", "Lexample/Child;");
+        let value_field = FieldKey::new("example/Child", "value", "Ljava/lang/String;");
+        heap.put_instance_field(root, child_field, Value::Reference(child))
+            .unwrap();
+        heap.put_instance_field(child, value_field, Value::Reference(kept))
+            .unwrap();
+
+        let roots = [Value::Reference(root)];
+        heap.collect(roots.iter());
+
+        assert_eq!(heap.string(kept).unwrap(), "nested");
         assert!(heap.string(dropped).is_err());
     }
 
@@ -1116,6 +1332,36 @@ mod tests {
             error
                 .to_string()
                 .contains("expected string on stack, found Int(42)")
+        );
+    }
+
+    #[test]
+    fn parses_supported_field_descriptors() {
+        assert_eq!(parse_field_descriptor("I").unwrap(), FieldType::Int);
+        assert_eq!(
+            parse_field_descriptor("Ljava/lang/String;").unwrap(),
+            FieldType::Reference
+        );
+        assert_eq!(
+            parse_field_descriptor("Lexample/Car;").unwrap(),
+            FieldType::Reference
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_field_descriptors() {
+        let array_error = parse_field_descriptor("[I").unwrap_err();
+        assert!(
+            array_error
+                .to_string()
+                .contains("unsupported array field descriptor")
+        );
+
+        let long_error = parse_field_descriptor("J").unwrap_err();
+        assert!(
+            long_error
+                .to_string()
+                .contains("unsupported field descriptor J")
         );
     }
 
