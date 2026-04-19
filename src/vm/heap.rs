@@ -117,6 +117,15 @@ impl Heap {
         }
     }
 
+    pub(super) fn instance_class_name(&self, reference: ObjectRef) -> JayResult<&str> {
+        match self.object(reference)?.kind {
+            ObjectKind::Instance { ref class_name, .. } => Ok(class_name),
+            ObjectKind::String(_) => {
+                Err(JayError::new("expected instance reference, found String"))
+            }
+        }
+    }
+
     pub(super) fn put_instance_field(
         &mut self,
         reference: ObjectRef,
@@ -134,12 +143,15 @@ impl Heap {
         }
     }
 
-    #[cfg(test)]
-    fn instance_field(&self, reference: ObjectRef, field: &FieldKey) -> JayResult<Option<&Value>> {
+    pub(super) fn get_instance_field(
+        &self,
+        reference: ObjectRef,
+        field: &FieldKey,
+    ) -> JayResult<Option<Value>> {
         match self.object(reference)?.kind {
-            ObjectKind::Instance { ref fields, .. } => Ok(fields.get(field)),
+            ObjectKind::Instance { ref fields, .. } => Ok(fields.get(field).cloned()),
             ObjectKind::String(_) => Err(JayError::new(
-                "expected instance reference for field lookup, found String",
+                "expected instance reference for getfield, found String",
             )),
         }
     }
@@ -259,13 +271,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            heap.instance_field(instance, &year).unwrap(),
-            Some(&Value::Int(2020))
+            heap.get_instance_field(instance, &year).unwrap(),
+            Some(Value::Int(2020))
         );
         assert_eq!(
-            heap.instance_field(instance, &make).unwrap(),
-            Some(&Value::Reference(make_value))
+            heap.get_instance_field(instance, &make).unwrap(),
+            Some(Value::Reference(make_value))
         );
+    }
+
+    #[test]
+    fn heap_reports_instance_class_name() {
+        let mut heap = Heap::new();
+        let instance = heap.allocate_instance("example/Car");
+
+        assert_eq!(heap.instance_class_name(instance).unwrap(), "example/Car");
     }
 
     #[test]
@@ -282,6 +302,21 @@ mod tests {
             error
                 .to_string()
                 .contains("expected instance reference for putfield")
+        );
+    }
+
+    #[test]
+    fn heap_rejects_field_reads_from_non_instance_references() {
+        let mut heap = Heap::new();
+        let string = heap.allocate_string("not an instance");
+        let field = FieldKey::new("example/Car", "year", "I");
+
+        let error = heap.get_instance_field(string, &field).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("expected instance reference for getfield")
         );
     }
 

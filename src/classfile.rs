@@ -12,6 +12,7 @@ pub struct ClassFile {
     pub this_class: String,
     pub super_class: Option<String>,
     pub methods: Vec<Method>,
+    pub bootstrap_methods: Vec<BootstrapMethod>,
 }
 
 impl ClassFile {
@@ -121,6 +122,45 @@ impl ConstantPool {
         }
     }
 
+    pub fn method_handle(&self, index: u16) -> JayResult<MethodHandleRef> {
+        match self.entry(index)? {
+            CpEntry::MethodHandle {
+                reference_kind,
+                reference_index,
+            } => Ok(MethodHandleRef {
+                reference_kind: *reference_kind,
+                reference_index: *reference_index,
+            }),
+            other => Err(JayError::new(format!(
+                "constant pool entry #{index} is not a method handle: {other:?}"
+            ))),
+        }
+    }
+
+    pub fn invoke_dynamic(&self, index: u16) -> JayResult<InvokeDynamicRef<'_>> {
+        match self.entry(index)? {
+            CpEntry::InvokeDynamic {
+                bootstrap_method_attr_index,
+                name_and_type_index,
+            } => match self.entry(*name_and_type_index)? {
+                CpEntry::NameAndType {
+                    name_index,
+                    descriptor_index,
+                } => Ok(InvokeDynamicRef {
+                    bootstrap_method_attr_index: *bootstrap_method_attr_index,
+                    name: self.utf8(*name_index)?,
+                    descriptor: self.utf8(*descriptor_index)?,
+                }),
+                other => Err(JayError::new(format!(
+                    "constant pool entry #{name_and_type_index} is not name-and-type: {other:?}"
+                ))),
+            },
+            other => Err(JayError::new(format!(
+                "constant pool entry #{index} is not an invokedynamic reference: {other:?}"
+            ))),
+        }
+    }
+
     fn member_ref(&self, class_index: u16, name_and_type_index: u16) -> JayResult<MemberRef<'_>> {
         let class_name = self.class_name(class_index)?;
         match self.entry(name_and_type_index)? {
@@ -153,6 +193,28 @@ pub struct MemberRef<'a> {
     pub descriptor: &'a str,
 }
 
+/// A `CONSTANT_InvokeDynamic` reference resolved to its call-site name and descriptor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvokeDynamicRef<'a> {
+    pub bootstrap_method_attr_index: u16,
+    pub name: &'a str,
+    pub descriptor: &'a str,
+}
+
+/// A `CONSTANT_MethodHandle` entry used by bootstrap method metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MethodHandleRef {
+    pub reference_kind: u8,
+    pub reference_index: u16,
+}
+
+/// One entry from a class-level `BootstrapMethods` attribute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapMethod {
+    pub method_ref: u16,
+    pub arguments: Vec<u16>,
+}
+
 #[derive(Debug, Clone)]
 enum CpEntry {
     Unusable,
@@ -183,10 +245,16 @@ enum CpEntry {
         name_index: u16,
         descriptor_index: u16,
     },
-    MethodHandle,
+    MethodHandle {
+        reference_kind: u8,
+        reference_index: u16,
+    },
     MethodType,
     Dynamic,
-    InvokeDynamic,
+    InvokeDynamic {
+        bootstrap_method_attr_index: u16,
+        name_and_type_index: u16,
+    },
     Module,
     Package,
 }
@@ -230,7 +298,7 @@ impl<'a> Parser<'a> {
         self.skip_interfaces()?;
         self.skip_fields()?;
         let methods = self.parse_methods(&constant_pool)?;
-        self.skip_attributes()?;
+        let bootstrap_methods = self.parse_class_attributes(&constant_pool)?;
 
         if self.offset != self.bytes.len() {
             return Err(JayError::new("trailing bytes after class file"));
@@ -243,6 +311,7 @@ impl<'a> Parser<'a> {
             this_class,
             super_class,
             methods,
+            bootstrap_methods,
         })
     }
 
@@ -303,10 +372,10 @@ impl<'a> Parser<'a> {
                     name_index: self.read_u2()?,
                     descriptor_index: self.read_u2()?,
                 },
-                15 => {
-                    self.skip(3)?;
-                    CpEntry::MethodHandle
-                }
+                15 => CpEntry::MethodHandle {
+                    reference_kind: self.read_u1()?,
+                    reference_index: self.read_u2()?,
+                },
                 16 => {
                     self.skip(2)?;
                     CpEntry::MethodType
@@ -315,10 +384,10 @@ impl<'a> Parser<'a> {
                     self.skip(4)?;
                     CpEntry::Dynamic
                 }
-                18 => {
-                    self.skip(4)?;
-                    CpEntry::InvokeDynamic
-                }
+                18 => CpEntry::InvokeDynamic {
+                    bootstrap_method_attr_index: self.read_u2()?,
+                    name_and_type_index: self.read_u2()?,
+                },
                 19 => {
                     self.skip(2)?;
                     CpEntry::Module
@@ -419,6 +488,49 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    fn parse_class_attributes(
+        &mut self,
+        constant_pool: &ConstantPool,
+    ) -> JayResult<Vec<BootstrapMethod>> {
+        let count = self.read_u2()? as usize;
+        let mut bootstrap_methods = Vec::new();
+        for _ in 0..count {
+            let name_index = self.read_u2()?;
+            let attribute_name = constant_pool.utf8(name_index)?;
+            let attribute_length = self.read_u4()? as usize;
+            if attribute_name == "BootstrapMethods" {
+                let attribute_end = self.offset.checked_add(attribute_length).ok_or_else(|| {
+                    JayError::new("class file offset overflow while reading BootstrapMethods")
+                })?;
+                bootstrap_methods = self.parse_bootstrap_methods()?;
+                if self.offset != attribute_end {
+                    return Err(JayError::new("BootstrapMethods attribute length mismatch"));
+                }
+            } else {
+                self.skip(attribute_length)?;
+            }
+        }
+        Ok(bootstrap_methods)
+    }
+
+    fn parse_bootstrap_methods(&mut self) -> JayResult<Vec<BootstrapMethod>> {
+        let count = self.read_u2()? as usize;
+        let mut bootstrap_methods = Vec::with_capacity(count);
+        for _ in 0..count {
+            let method_ref = self.read_u2()?;
+            let argument_count = self.read_u2()? as usize;
+            let mut arguments = Vec::with_capacity(argument_count);
+            for _ in 0..argument_count {
+                arguments.push(self.read_u2()?);
+            }
+            bootstrap_methods.push(BootstrapMethod {
+                method_ref,
+                arguments,
+            });
+        }
+        Ok(bootstrap_methods)
+    }
+
     fn skip_attributes_named(&mut self, constant_pool: &ConstantPool) -> JayResult<()> {
         let count = self.read_u2()? as usize;
         for _ in 0..count {
@@ -504,5 +616,88 @@ mod tests {
         let class_file = ClassFile::parse(&bytes).unwrap();
 
         assert_eq!(class_file.major_version, 69);
+    }
+
+    #[test]
+    fn parses_invokedynamic_and_bootstrap_methods() {
+        fn push_u2(bytes: &mut Vec<u8>, value: u16) {
+            bytes.extend(value.to_be_bytes());
+        }
+
+        fn push_u4(bytes: &mut Vec<u8>, value: u32) {
+            bytes.extend(value.to_be_bytes());
+        }
+
+        fn push_utf8(bytes: &mut Vec<u8>, value: &str) {
+            bytes.push(1);
+            push_u2(bytes, value.len() as u16);
+            bytes.extend(value.as_bytes());
+        }
+
+        let mut bytes = Vec::new();
+        push_u4(&mut bytes, 0xCAFEBABE);
+        push_u2(&mut bytes, 0);
+        push_u2(&mut bytes, 69);
+        push_u2(&mut bytes, 18);
+
+        bytes.extend([7, 0, 2]); // #1 Class Empty
+        push_utf8(&mut bytes, "Empty"); // #2
+        bytes.extend([7, 0, 4]); // #3 Class java/lang/Object
+        push_utf8(&mut bytes, "java/lang/Object"); // #4
+        push_utf8(&mut bytes, "BootstrapMethods"); // #5
+        bytes.extend([15, 6, 0, 7]); // #6 MethodHandle REF_invokeStatic #7
+        bytes.extend([10, 0, 8, 0, 10]); // #7 Methodref #8.#10
+        bytes.extend([7, 0, 9]); // #8 Class StringConcatFactory
+        push_utf8(&mut bytes, "java/lang/invoke/StringConcatFactory"); // #9
+        bytes.extend([12, 0, 11, 0, 12]); // #10 NameAndType #11:#12
+        push_utf8(&mut bytes, "makeConcatWithConstants"); // #11
+        push_utf8(
+            &mut bytes,
+            "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;",
+        ); // #12
+        bytes.extend([8, 0, 14]); // #13 String #14
+        push_utf8(&mut bytes, "Make: \x01"); // #14
+        bytes.extend([18, 0, 0, 0, 16]); // #15 InvokeDynamic bootstrap 0, #16
+        bytes.extend([12, 0, 11, 0, 17]); // #16 NameAndType #11:#17
+        push_utf8(&mut bytes, "(Ljava/lang/String;)Ljava/lang/String;"); // #17
+
+        bytes.extend([0, 0x21]); // access_flags
+        bytes.extend([0, 1]); // this_class
+        bytes.extend([0, 3]); // super_class
+        bytes.extend([0, 0]); // interfaces_count
+        bytes.extend([0, 0]); // fields_count
+        bytes.extend([0, 0]); // methods_count
+        bytes.extend([0, 1]); // attributes_count
+        bytes.extend([0, 5]); // BootstrapMethods
+        push_u4(&mut bytes, 8);
+        bytes.extend([0, 1]); // num_bootstrap_methods
+        bytes.extend([0, 6]); // bootstrap_method_ref
+        bytes.extend([0, 1]); // num_bootstrap_arguments
+        bytes.extend([0, 13]); // recipe string
+
+        let class_file = ClassFile::parse(&bytes).unwrap();
+
+        assert_eq!(
+            class_file.bootstrap_methods,
+            vec![BootstrapMethod {
+                method_ref: 6,
+                arguments: vec![13]
+            }]
+        );
+        assert_eq!(
+            class_file.constant_pool.method_handle(6).unwrap(),
+            MethodHandleRef {
+                reference_kind: 6,
+                reference_index: 7
+            }
+        );
+        assert_eq!(
+            class_file.constant_pool.invoke_dynamic(15).unwrap(),
+            InvokeDynamicRef {
+                bootstrap_method_attr_index: 0,
+                name: "makeConcatWithConstants",
+                descriptor: "(Ljava/lang/String;)Ljava/lang/String;"
+            }
+        );
     }
 }
