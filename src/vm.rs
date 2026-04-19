@@ -130,6 +130,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 }
                 0x3b..=0x3e => frame.store_int_local((opcode - 0x3b) as usize)?,
                 0x4b..=0x4e => frame.store_reference_local((opcode - 0x4b) as usize)?,
+                0x57 => {
+                    let _ = frame.pop()?;
+                }
                 0x59 => frame.duplicate_top()?,
                 0x60 => {
                     let right = frame.pop_int()?;

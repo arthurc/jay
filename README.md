@@ -65,6 +65,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Static method calls with `int` and `String` parameters and `int`, `String`, or `void` return values
 - Same-class and cross-class static method calls
 - Simple object allocation and constructor calls for classes without fields
+- Constructor expression statements (for example `new Empty();`)
 - Class files up to the parser's supported class file version range
 
 Object fields, general instance method behavior, arrays, string interning, and
