@@ -750,6 +750,50 @@ public class StaticStringLocalMain {
 }
 
 #[test]
+fn keeps_caller_string_local_alive_when_nested_call_triggers_gc() {
+    let root = temp_dir("gc-keeps-caller-string-local");
+    compile_java(
+        &root,
+        "GcRootMain.java",
+        r#"
+public class GcRootMain {
+    static void sink(String value) {
+    }
+
+    static void churn() {
+        sink("a");
+        sink("b");
+        sink("c");
+        sink("d");
+        sink("e");
+        sink("f");
+        sink("g");
+        sink("h");
+        sink("i");
+    }
+
+    public static void main(String[] args) {
+        String saved = "survivor";
+        churn();
+        System.out.println(saved);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "GcRootMain"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "survivor\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn reports_non_static_same_class_method_called_with_invokestatic() {
     let root = temp_dir("non-static-invokestatic");
     compile_java(

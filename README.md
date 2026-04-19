@@ -59,13 +59,16 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - JDK boot class lookup through `JAVA_HOME/lib/modules`
 - `public static void main(String[] args)` and `public static void main()`
 - `System.out.println(String)` and `System.out.println(int)`
+- Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
 - Integer comparisons, branches, and simple loops
 - Static method calls with `int` and `String` parameters and `int`, `String`, or `void` return values
 - Same-class and cross-class static method calls
 - Class files up to the parser's supported class file version range
 
-Unsupported bytecode or method shapes fail with an explicit error.
+General object allocation with `new`, fields, arrays, string interning, and string
+concatenation are still unsupported. Unsupported bytecode or method shapes fail
+with an explicit error.
 
 ## Development
 
