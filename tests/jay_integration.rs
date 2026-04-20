@@ -7,6 +7,9 @@ mod arithmetic;
 #[path = "jay_integration/class_loading.rs"]
 mod class_loading;
 
+#[path = "jay_integration/collections.rs"]
+mod collections;
+
 #[path = "jay_integration/objects.rs"]
 mod objects;
 

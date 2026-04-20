@@ -78,6 +78,26 @@ impl Frame {
         Ok(())
     }
 
+    pub(super) fn duplicate_top_insert_two_down(&mut self) -> JayResult<()> {
+        let len = self.stack.len();
+        if len < 2 {
+            return Err(JayError::new("operand stack underflow on dup_x1"));
+        }
+
+        let value = self.stack[len - 1].clone();
+        self.stack.insert(len - 2, value);
+        Ok(())
+    }
+
+    pub(super) fn references_equal(&self, left: &Value, right: &Value) -> JayResult<bool> {
+        match (left, right) {
+            (Value::Reference(left), Value::Reference(right)) => Ok(left == right),
+            _ => Err(JayError::new(format!(
+                "expected references for comparison, found {left:?} and {right:?}"
+            ))),
+        }
+    }
+
     fn local_int(&self, index: usize) -> JayResult<i32> {
         match self.local_slot(index)? {
             Value::Int(value) => Ok(*value),
