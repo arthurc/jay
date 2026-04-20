@@ -66,12 +66,16 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Same-class and cross-class static method calls
 - Simple object allocation and constructor calls
 - Instance field writes for `int` and object references
+- Instance field reads for assigned `int` and object references
+- Same-class and cross-class instance method calls with supported parameter and return types
+- Private instance method calls invoked with `invokevirtual` resolve to the declaring class (no subclass override dispatch)
+- Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
 - Constructor expression statements (for example `new Empty();`)
 - Class files up to the parser's supported class file version range
 
-Instance field reads, general instance method behavior, arrays, string interning,
-and string concatenation are still unsupported. Unsupported bytecode or method
-shapes fail with an explicit error.
+Arrays, string interning, null references, and general invokedynamic bootstrap
+execution are still unsupported. Unsupported bytecode or method shapes fail with
+an explicit error.
 
 ## Development
 
