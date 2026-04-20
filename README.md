@@ -64,7 +64,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
 - Integer comparisons, branches, and simple loops
 - Reference comparison branches for non-null references
-- Static fields and class initialization through static class initializers, including `putstatic`-triggered initialization, re-entrant initialization guards, and preserving `putstatic` reference values across initializer-triggered GC
+- Static fields and class initialization through static class initializers, including `putstatic`-triggered initialization, re-entrant initialization guards, preserving `putstatic` reference values across initializer-triggered GC, and resolving interface fields inherited from superinterfaces
 - Static method calls with `int` and object-reference parameters and `int`, object-reference, or `void` return values
 - Same-class and cross-class static method calls
 - Simple object allocation and constructor calls
@@ -72,7 +72,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Instance field writes for `int` and object references
 - Instance field reads for assigned `int` and object references
 - Same-class and cross-class instance method calls with `int` and object-reference parameters and return values
-- Interface method calls that dispatch to the receiver class implementation, including methods inherited from superinterfaces
+- Interface method calls that dispatch to receiver-class overrides or interface default methods, including methods inherited from superinterfaces
 - Private instance method calls invoked with `invokevirtual` resolve to the declaring class (no subclass override dispatch)
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
 - Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`

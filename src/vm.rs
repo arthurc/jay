@@ -832,12 +832,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
         )?;
         let (target_class_file, target_method) = if declaring_method.is_private() {
             (declaring_class_file, declaring_method)
-        } else {
-            let class_file = self.resolve_instance_method_class(
-                &receiver_class_name,
-                &target_method_name,
-                &target_descriptor,
-            )?;
+        } else if let Some(class_file) = self.find_instance_method_class(
+            &receiver_class_name,
+            &target_method_name,
+            &target_descriptor,
+        )? {
             let method = class_file
                 .find_method(&target_method_name, &target_descriptor)
                 .ok_or_else(|| {
@@ -851,6 +850,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 })?
                 .clone();
             (class_file, method)
+        } else {
+            (declaring_class_file, declaring_method)
         };
         let target_name = format!(
             "{}.{}{}",
@@ -986,21 +987,32 @@ impl<'a, W: Write> Interpreter<'a, W> {
         method_name: &str,
         descriptor: &str,
     ) -> JayResult<ClassFile> {
+        self.find_instance_method_class(receiver_class_name, method_name, descriptor)?
+            .ok_or_else(|| {
+                JayError::new(format!(
+                    "invokevirtual target {}.{}{} not found",
+                    receiver_class_name.replace('/', "."),
+                    method_name,
+                    descriptor
+                ))
+            })
+    }
+
+    fn find_instance_method_class(
+        &self,
+        receiver_class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> JayResult<Option<ClassFile>> {
         let mut next_class_name = Some(receiver_class_name.to_string());
         while let Some(class_name) = next_class_name {
             let class_file = self.load_class_file(&class_name)?;
             if class_file.find_method(method_name, descriptor).is_some() {
-                return Ok(class_file);
+                return Ok(Some(class_file));
             }
             next_class_name = class_file.super_class.clone();
         }
-
-        Err(JayError::new(format!(
-            "invokevirtual target {}.{}{} not found",
-            receiver_class_name.replace('/', "."),
-            method_name,
-            descriptor
-        )))
+        Ok(None)
     }
 
     /// Resolves an instance method reference against the symbolic owner class hierarchy.
@@ -1065,13 +1077,24 @@ impl<'a, W: Write> Interpreter<'a, W> {
         field_name: &str,
         field_descriptor: &str,
     ) -> JayResult<String> {
-        let mut next_class_name = Some(class_name.to_string());
-        while let Some(candidate_class_name) = next_class_name {
+        let mut pending_class_names = vec![class_name.to_string()];
+        let mut visited = HashSet::new();
+        while let Some(candidate_class_name) = pending_class_names.pop() {
+            if !visited.insert(candidate_class_name.clone()) {
+                continue;
+            }
             let class_file = self.load_class_file(&candidate_class_name)?;
             if class_file.has_field(field_name, field_descriptor) {
                 return Ok(class_file.this_class);
             }
-            next_class_name = class_file.super_class;
+
+            if let Some(super_class) = class_file.super_class {
+                pending_class_names.push(super_class);
+            }
+
+            for interface in class_file.interfaces.iter().rev() {
+                pending_class_names.push(interface.to_string());
+            }
         }
 
         Err(JayError::new(format!(
