@@ -11,6 +11,7 @@ pub struct ClassFile {
     pub constant_pool: ConstantPool,
     pub this_class: String,
     pub super_class: Option<String>,
+    pub interfaces: Vec<String>,
     pub methods: Vec<Method>,
     pub fields: Vec<Field>,
     pub bootstrap_methods: Vec<BootstrapMethod>,
@@ -312,7 +313,7 @@ impl<'a> Parser<'a> {
             Some(constant_pool.class_name(super_class_index)?.to_string())
         };
 
-        self.skip_interfaces()?;
+        let interfaces = self.parse_interfaces(&constant_pool)?;
         let fields = self.parse_fields(&constant_pool)?;
         let methods = self.parse_methods(&constant_pool)?;
         let bootstrap_methods = self.parse_class_attributes(&constant_pool)?;
@@ -327,6 +328,7 @@ impl<'a> Parser<'a> {
             constant_pool,
             this_class,
             super_class,
+            interfaces,
             methods,
             fields,
             bootstrap_methods,
@@ -428,9 +430,13 @@ impl<'a> Parser<'a> {
         Ok(ConstantPool { entries })
     }
 
-    fn skip_interfaces(&mut self) -> JayResult<()> {
+    fn parse_interfaces(&mut self, constant_pool: &ConstantPool) -> JayResult<Vec<String>> {
         let count = self.read_u2()? as usize;
-        self.skip(count * 2)
+        let mut interfaces = Vec::with_capacity(count);
+        for _ in 0..count {
+            interfaces.push(constant_pool.class_name(self.read_u2()?)?.to_string());
+        }
+        Ok(interfaces)
     }
 
     fn parse_fields(&mut self, constant_pool: &ConstantPool) -> JayResult<Vec<Field>> {
@@ -721,5 +727,38 @@ mod tests {
                 descriptor: "(Ljava/lang/String;)Ljava/lang/String;"
             }
         );
+    }
+
+    #[test]
+    fn parses_interfaces() {
+        let bytes = [
+            0xCA, 0xFE, 0xBA, 0xBE, // magic
+            0x00, 0x00, // minor
+            0x00, 0x3D, // major 61
+            0x00, 0x09, // constant_pool_count
+            0x07, 0x00, 0x02, // #1 Class Example
+            0x01, 0x00, 0x07, b'E', b'x', b'a', b'm', b'p', b'l', b'e', // #2 Utf8 Example
+            0x07, 0x00, 0x04, // #3 Class java/lang/Object
+            0x01, 0x00, 0x10, b'j', b'a', b'v', b'a', b'/', b'l', b'a', b'n', b'g', b'/', b'O',
+            b'b', b'j', b'e', b'c', b't', // #4 Utf8 java/lang/Object
+            0x07, 0x00, 0x06, // #5 Class Named
+            0x01, 0x00, 0x05, b'N', b'a', b'm', b'e', b'd', // #6 Utf8 Named
+            0x07, 0x00, 0x08, // #7 Class Taggable
+            0x01, 0x00, 0x08, b'T', b'a', b'g', b'g', b'a', b'b', b'l',
+            b'e', // #8 Utf8 Taggable
+            0x00, 0x21, // access_flags
+            0x00, 0x01, // this_class
+            0x00, 0x03, // super_class
+            0x00, 0x02, // interfaces_count
+            0x00, 0x05, // interfaces[0] Named
+            0x00, 0x07, // interfaces[1] Taggable
+            0x00, 0x00, // fields_count
+            0x00, 0x00, // methods_count
+            0x00, 0x00, // attributes_count
+        ];
+
+        let class_file = ClassFile::parse(&bytes).unwrap();
+
+        assert_eq!(class_file.interfaces, vec!["Named", "Taggable"]);
     }
 }

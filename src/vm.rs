@@ -4,6 +4,7 @@ mod frame;
 mod heap;
 mod value;
 
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -908,13 +909,34 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Ok(false);
         }
 
-        let mut next_class_name = Some(actual_class.to_string());
-        while let Some(class_name) = next_class_name {
-            let class_file = self.load_class_file(&class_name)?;
-            if class_file.this_class == expected_class {
+        self.reference_matches_type(actual_class, expected_class, &mut HashSet::new())
+    }
+
+    fn reference_matches_type(
+        &self,
+        class_name: &str,
+        expected_class: &str,
+        visited: &mut HashSet<String>,
+    ) -> JayResult<bool> {
+        if !visited.insert(class_name.to_string()) {
+            return Ok(false);
+        }
+
+        let class_file = self.load_class_file(class_name)?;
+        if class_file.this_class == expected_class {
+            return Ok(true);
+        }
+
+        for interface in &class_file.interfaces {
+            if interface == expected_class
+                || self.reference_matches_type(interface, expected_class, visited)?
+            {
                 return Ok(true);
             }
-            next_class_name = class_file.super_class;
+        }
+
+        if let Some(super_class) = class_file.super_class {
+            return self.reference_matches_type(&super_class, expected_class, visited);
         }
 
         Ok(false)

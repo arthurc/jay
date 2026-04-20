@@ -352,6 +352,46 @@ public class Main {
 }
 
 #[test]
+fn accepts_reference_arguments_and_returns_assignable_to_interfaces() {
+    let root = temp_dir("accepts-reference-interface-assignability");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+interface Named {
+}
+
+class Box implements Named {
+}
+
+class Helper {
+    static Named identity(Named value) {
+        return value;
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Helper.identity(new Box());
+        System.out.println("ok");
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_same_class_instance_int_method() {
     let root = temp_dir("same-class-instance-int-method");
     compile_java(
