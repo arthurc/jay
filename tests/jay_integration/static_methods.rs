@@ -159,6 +159,38 @@ public class StaticStringLocalMain {
 }
 
 #[test]
+fn discards_unused_long_return_values() {
+    let root = temp_dir("discard-unused-long-return-value");
+    compile_java(
+        &root,
+        "DiscardLongMain.java",
+        r#"
+public class DiscardLongMain {
+    static long tick() {
+        return System.currentTimeMillis();
+    }
+
+    public static void main(String[] args) {
+        tick();
+        System.out.println("ok");
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "DiscardLongMain"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn keeps_caller_string_local_alive_when_nested_call_triggers_gc() {
     let root = temp_dir("gc-keeps-caller-string-local");
     compile_java(

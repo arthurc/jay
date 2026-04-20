@@ -58,10 +58,11 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Directory classpaths for application classes
 - JDK boot class lookup through `JAVA_HOME/lib/modules`
 - `public static void main(String[] args)` and `public static void main()`
-- `System.out.println(String)`, `System.out.println(int)`, and `System.out.println(boolean)`
+- `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, and `System.out.println(boolean)`
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Limited heap-allocated `Object[]` arrays with allocation, length, load, and store bytecodes
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
+- Limited `long` constants, local variables, fields, method parameters, and return values, including discarding unused `long` results from calls
 - Integer comparisons, branches, and simple loops
 - Reference comparison branches for non-null references
 - Static fields and class initialization through static class initializers, including `putstatic`-triggered initialization, re-entrant initialization guards, preserving `putstatic` reference values across initializer-triggered GC, and resolving interface fields inherited from superinterfaces
@@ -76,12 +77,14 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Private instance method calls invoked with `invokevirtual` resolve to the declaring class (no subclass override dispatch)
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
 - Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
+- `System.currentTimeMillis()` as a focused native shim for simple `java.util.Date` construction
 - Constructor expression statements (for example `new Empty();`)
 - Class files up to the parser's supported class file version range
 
 Primitive arrays, null references, string interning, full collection semantics,
-and general invokedynamic bootstrap execution are still unsupported. Unsupported
-bytecode or method shapes fail with an explicit error.
+general invokedynamic bootstrap execution, long arithmetic, broad date
+formatting, and general native/JDK method execution are still unsupported.
+Unsupported bytecode or method shapes fail with an explicit error.
 
 ## Development
 

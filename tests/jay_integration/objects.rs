@@ -155,6 +155,85 @@ public class Main {
 }
 
 #[test]
+fn runs_long_fields_parameters_returns_and_println() {
+    let root = temp_dir("long-fields-parameters-returns");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class LongBox {
+    long value;
+
+    LongBox(long value, int marker) {
+        this.value = value;
+        System.out.println(marker);
+    }
+
+    long value() {
+        return value;
+    }
+}
+
+public class Main {
+    static long pass(long value, int marker) {
+        System.out.println(marker);
+        return value;
+    }
+
+    public static void main(String[] args) {
+        LongBox box = new LongBox(1234567890123L, 7);
+        System.out.println(box.value());
+        System.out.println(pass(1L, 8));
+        System.out.println(0L);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "7\n1234567890123\n8\n1\n0\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_date_constructor_with_current_time_millis_long() {
+    let root = temp_dir("date-constructor-current-time-millis-long");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        new java.util.Date();
+        System.out.println("ok");
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_static_method_with_object_reference_parameter_and_return() {
     let root = temp_dir("static-object-reference-parameter-return");
     compile_java(
