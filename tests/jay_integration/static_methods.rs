@@ -1,4 +1,7 @@
-use crate::support::{compile_java, compile_java_sources, jay, make_method_non_static, temp_dir};
+use crate::support::{
+    compile_java, compile_java_sources, jay, make_method_non_static, replace_utf8_constant,
+    temp_dir,
+};
 
 #[test]
 fn runs_same_class_static_int_method() {
@@ -196,6 +199,89 @@ public class GcRootMain {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "survivor\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn keeps_static_string_field_alive_when_gc_runs() {
+    let root = temp_dir("gc-keeps-static-string-field");
+    compile_java(
+        &root,
+        "StaticFieldGcMain.java",
+        r#"
+class StaticHolder {
+    static String saved;
+}
+
+public class StaticFieldGcMain {
+    static void sink(String value) {
+    }
+
+    static void churn() {
+        sink("a");
+        sink("b");
+        sink("c");
+        sink("d");
+        sink("e");
+        sink("f");
+        sink("g");
+        sink("h");
+        sink("i");
+    }
+
+    public static void main(String[] args) {
+        StaticHolder.saved = "static survivor";
+        churn();
+        System.out.println(StaticHolder.saved);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "StaticFieldGcMain"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "static survivor\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn getstatic_resolves_interface_field_declared_on_superinterface() {
+    let root = temp_dir("getstatic-superinterface-field");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+interface A {
+    int VALUE = 7;
+}
+
+interface B extends A {
+}
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(A.VALUE);
+    }
+}
+"#,
+    );
+    replace_utf8_constant(&root, "Main.class", "A", "B");
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
 

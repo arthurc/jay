@@ -51,7 +51,7 @@ pub(super) enum ReturnType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ValueType {
     Int,
-    /// An object reference descriptor such as `Ljava/lang/String;` or `Lexample/Box;`.
+    /// A reference type name or descriptor, such as `java/lang/String` or `[Ljava/lang/Object;`.
     Reference(String),
 }
 
@@ -94,11 +94,15 @@ fn parse_complete_value_type(input: &str, descriptor: &str) -> JayResult<ValueTy
 }
 
 pub(super) fn parse_field_descriptor(descriptor: &str) -> JayResult<FieldType> {
-    if descriptor == "I" {
+    if descriptor == "I" || descriptor == "Z" {
         return Ok(FieldType::Int);
     }
 
     if descriptor.starts_with('L') && descriptor.ends_with(';') && descriptor.len() > 2 {
+        return Ok(FieldType::Reference);
+    }
+
+    if is_supported_object_array_descriptor(descriptor) {
         return Ok(FieldType::Reference);
     }
 
@@ -118,7 +122,28 @@ fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueTyp
         return Ok((ValueType::Int, remaining));
     }
 
-    if input.starts_with('[') {
+    if let Some(remaining) = input.strip_prefix('Z') {
+        return Ok((ValueType::Int, remaining));
+    }
+
+    if let Some(array_type) = input.strip_prefix('[') {
+        if let Some(reference_type) = array_type.strip_prefix('L') {
+            let Some(end_index) = reference_type.find(';') else {
+                return Err(JayError::new(format!(
+                    "invalid method descriptor {descriptor}"
+                )));
+            };
+            if end_index == 0 {
+                return Err(JayError::new(format!(
+                    "invalid method descriptor {descriptor}"
+                )));
+            }
+
+            let array_descriptor = input[..end_index + 3].to_string();
+            let remaining = &reference_type[end_index + 1..];
+            return Ok((ValueType::Reference(array_descriptor), remaining));
+        }
+
         return Err(JayError::new(format!(
             "unsupported array type in method descriptor {descriptor}"
         )));
@@ -146,6 +171,13 @@ fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueTyp
     )))
 }
 
+fn is_supported_object_array_descriptor(descriptor: &str) -> bool {
+    let Some(element_type) = descriptor.strip_prefix('[') else {
+        return false;
+    };
+    element_type.starts_with('L') && element_type.ends_with(';') && element_type.len() > 2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,12 +185,17 @@ mod tests {
     #[test]
     fn parses_supported_field_descriptors() {
         assert_eq!(parse_field_descriptor("I").unwrap(), FieldType::Int);
+        assert_eq!(parse_field_descriptor("Z").unwrap(), FieldType::Int);
         assert_eq!(
             parse_field_descriptor("Ljava/lang/String;").unwrap(),
             FieldType::Reference
         );
         assert_eq!(
             parse_field_descriptor("Lexample/Car;").unwrap(),
+            FieldType::Reference
+        );
+        assert_eq!(
+            parse_field_descriptor("[Ljava/lang/Object;").unwrap(),
             FieldType::Reference
         );
     }
@@ -188,6 +225,14 @@ mod tests {
             descriptor.parameter_types,
             vec![ValueType::Int, ValueType::Int]
         );
+        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Int));
+    }
+
+    #[test]
+    fn parses_boolean_method_descriptors_as_int_values() {
+        let descriptor = MethodDescriptor::parse("(Z)Z").unwrap();
+
+        assert_eq!(descriptor.parameter_types, vec![ValueType::Int]);
         assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Int));
     }
 
@@ -250,8 +295,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_array_method_descriptors() {
-        let error = MethodDescriptor::parse("([Ljava/lang/String;)V").unwrap_err();
+    fn parses_object_array_method_descriptors_as_references() {
+        let descriptor =
+            MethodDescriptor::parse("([Ljava/lang/Object;)[Ljava/lang/Object;").unwrap();
+
+        assert_eq!(
+            descriptor.parameter_types,
+            vec![ValueType::Reference("[Ljava/lang/Object;".to_string())]
+        );
+        assert_eq!(
+            descriptor.return_type,
+            ReturnType::Type(ValueType::Reference("[Ljava/lang/Object;".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_primitive_array_method_descriptors() {
+        let error = MethodDescriptor::parse("([I)V").unwrap_err();
 
         assert!(error.to_string().contains("unsupported array type"));
     }

@@ -4,7 +4,7 @@ mod frame;
 mod heap;
 mod value;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -73,6 +73,9 @@ struct Interpreter<'a, W: Write> {
     output: &'a mut W,
     heap: Heap,
     saved_roots: Vec<Vec<Value>>,
+    static_fields: HashMap<FieldKey, Value>,
+    initialized_classes: HashSet<String>,
+    initializing_classes: HashSet<String>,
 }
 
 impl<'a, W: Write> Interpreter<'a, W> {
@@ -82,6 +85,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
             output,
             heap: Heap::new(),
             saved_roots: Vec::new(),
+            static_fields: HashMap::new(),
+            initialized_classes: HashSet::new(),
+            initializing_classes: HashSet::new(),
         }
     }
 
@@ -144,6 +150,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let _ = frame.pop()?;
                 }
                 0x59 => frame.duplicate_top()?,
+                0x5a => frame.duplicate_top_insert_two_down()?,
                 0x60 => {
                     let right = frame.pop_int()?;
                     let left = frame.pop_int()?;
@@ -187,6 +194,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
                         pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
                     }
                 }
+                0xa5 | 0xa6 => {
+                    let offset = read_i2(&code.bytes, &mut pc)?;
+                    let right = frame.pop_reference()?;
+                    let left = frame.pop_reference()?;
+                    let equal = frame.references_equal(&left, &right)?;
+                    if (opcode == 0xa5 && equal) || (opcode == 0xa6 && !equal) {
+                        pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
+                    }
+                }
                 0xa7 => {
                     let offset = read_i2(&code.bytes, &mut pc)?;
                     pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
@@ -197,6 +213,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 0xb2 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.get_static(class_file, frame, index)?;
+                }
+                0xb3 => {
+                    let index = read_u2(&code.bytes, &mut pc)?;
+                    self.put_static(class_file, frame, index)?;
                 }
                 0xb4 => {
                     let index = read_u2(&code.bytes, &mut pc)?;
@@ -218,6 +238,17 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.invoke_static(class_file, frame, index)?;
                 }
+                0xb9 => {
+                    let index = read_u2(&code.bytes, &mut pc)?;
+                    let count = read_u1(&code.bytes, &mut pc)?;
+                    let zero = read_u1(&code.bytes, &mut pc)?;
+                    if zero != 0 {
+                        return Err(JayError::new(format!(
+                            "invokeinterface at pc {opcode_pc} has nonzero padding"
+                        )));
+                    }
+                    self.invoke_interface(class_file, frame, index, count)?;
+                }
                 0xba => {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     let zero = read_u2(&code.bytes, &mut pc)?;
@@ -231,6 +262,46 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 0xbb => {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.new_object(class_file, frame, index)?;
+                }
+                0xbd => {
+                    let index = read_u2(&code.bytes, &mut pc)?;
+                    self.new_object_array(class_file, frame, index)?;
+                }
+                0xbe => {
+                    let reference = frame.pop_object_ref()?;
+                    let length = self.heap.array_length(reference)?;
+                    let length = i32::try_from(length)
+                        .map_err(|_| JayError::new("array length exceeds int range"))?;
+                    frame.stack.push(Value::Int(length));
+                }
+                0xc0 => {
+                    let index = read_u2(&code.bytes, &mut pc)?;
+                    self.check_cast(class_file, frame, index)?;
+                }
+                0xc6 | 0xc7 => {
+                    let offset = read_i2(&code.bytes, &mut pc)?;
+                    let _reference = frame.pop_reference()?;
+                    if opcode == 0xc7 {
+                        pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
+                    }
+                }
+                0x32 => {
+                    let index = frame.pop_int()?;
+                    let reference = frame.pop_object_ref()?;
+                    let value = self
+                        .heap
+                        .load_array_reference(reference, checked_array_index(index)?)?;
+                    frame.stack.push(value);
+                }
+                0x53 => {
+                    let value = frame.pop_reference()?;
+                    let index = frame.pop_int()?;
+                    let reference = frame.pop_object_ref()?;
+                    self.heap.store_array_reference(
+                        reference,
+                        checked_array_index(index)?,
+                        value,
+                    )?;
                 }
                 _ => {
                     return Err(JayError::new(format!(
@@ -251,6 +322,31 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<()> {
         let class_name = class_file.constant_pool.class_name(index)?;
         let reference = self.heap.allocate_instance(class_name);
+        frame.stack.push(Value::Reference(reference));
+        self.collect_if_needed(frame);
+        Ok(())
+    }
+
+    fn new_object_array(
+        &mut self,
+        class_file: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let class_name = class_file.constant_pool.class_name(index)?;
+        if class_name != "java/lang/Object" {
+            return Err(JayError::new(format!(
+                "unsupported anewarray component {}",
+                class_name.replace('/', ".")
+            )));
+        }
+
+        let length = frame.pop_int()?;
+        if length < 0 {
+            return Err(JayError::new(format!("negative array length {length}")));
+        }
+
+        let reference = self.heap.allocate_object_array(length as usize);
         frame.stack.push(Value::Reference(reference));
         self.collect_if_needed(frame);
         Ok(())
@@ -294,11 +390,57 @@ impl<'a, W: Write> Interpreter<'a, W> {
             frame.stack.push(Value::PrintStream);
             Ok(())
         } else {
-            Err(JayError::new(format!(
-                "unsupported getstatic {}.{}:{}",
-                field.class_name, field.name, field.descriptor
-            )))
+            let field_type = parse_field_descriptor(field.descriptor)?;
+            let declaring_class_name =
+                self.resolve_field_class(field.class_name, field.name, field.descriptor)?;
+            self.initialize_class(&declaring_class_name, frame)?;
+            let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
+            let value = self.static_fields.get(&field_key).cloned();
+            match (field_type, value) {
+                (FieldType::Int, Some(Value::Int(value))) => {
+                    frame.stack.push(Value::Int(value));
+                    Ok(())
+                }
+                (FieldType::Int, None) => {
+                    frame.stack.push(Value::Int(0));
+                    Ok(())
+                }
+                (FieldType::Reference, Some(value @ Value::Reference(_))) => {
+                    frame.stack.push(value);
+                    Ok(())
+                }
+                (FieldType::Reference, None) => Err(JayError::new(format!(
+                    "getstatic {}.{}:{} is unset; null references are unsupported",
+                    field.class_name.replace('/', "."),
+                    field.name,
+                    field.descriptor
+                ))),
+                (_, Some(other)) => Err(JayError::new(format!(
+                    "getstatic {}.{}:{} found {}",
+                    field.class_name.replace('/', "."),
+                    field.name,
+                    field.descriptor,
+                    other.type_name(&self.heap)?
+                ))),
+            }
         }
+    }
+
+    fn put_static(
+        &mut self,
+        class_file: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let field = class_file.constant_pool.field_ref(index)?;
+        let field_type = parse_field_descriptor(field.descriptor)?;
+        let declaring_class_name =
+            self.resolve_field_class(field.class_name, field.name, field.descriptor)?;
+        self.initialize_class(&declaring_class_name, frame)?;
+        let value = frame.pop_field_value(field_type)?;
+        let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
+        self.static_fields.insert(field_key, value);
+        Ok(())
     }
 
     fn get_field(
@@ -311,7 +453,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let field_type = parse_field_descriptor(field.descriptor)?;
         let receiver = frame.pop_object_ref()?;
         let declaring_class_name =
-            self.resolve_instance_field_class(field.class_name, field.name, field.descriptor)?;
+            self.resolve_field_class(field.class_name, field.name, field.descriptor)?;
         let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
         let value = self.heap.get_instance_field(receiver, &field_key)?;
         match (field_type, value) {
@@ -354,7 +496,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let value = frame.pop_field_value(field_type)?;
         let receiver = frame.pop_object_ref()?;
         let declaring_class_name =
-            self.resolve_instance_field_class(field.class_name, field.name, field.descriptor)?;
+            self.resolve_field_class(field.class_name, field.name, field.descriptor)?;
         let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
         self.heap.put_instance_field(receiver, field_key, value)
     }
@@ -379,6 +521,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let value = frame.pop_int()?;
                     frame.pop_print_stream()?;
                     writeln!(self.output, "{value}")?;
+                    Ok(())
+                }
+                "(Z)V" => {
+                    let value = frame.pop_int()?;
+                    frame.pop_print_stream()?;
+                    let text = if value == 0 { "false" } else { "true" };
+                    writeln!(self.output, "{text}")?;
                     Ok(())
                 }
                 _ => Err(JayError::new(format!(
@@ -647,6 +796,104 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Ok(())
     }
 
+    fn invoke_interface(
+        &mut self,
+        caller_class_file: &ClassFile,
+        caller: &mut Frame,
+        index: u16,
+        count: u8,
+    ) -> JayResult<()> {
+        if count == 0 {
+            return Err(JayError::new(
+                "invokeinterface argument count must be nonzero",
+            ));
+        }
+
+        let method = caller_class_file.constant_pool.method_ref(index)?;
+        let target_method_name = method.name.to_string();
+        let target_descriptor = method.descriptor.to_string();
+        let descriptor = MethodDescriptor::parse(&target_descriptor)?;
+        let mut arguments = self.pop_method_arguments(
+            caller,
+            &descriptor,
+            &format!(
+                "invokeinterface target {}.{}{}",
+                method.class_name.replace('/', "."),
+                target_method_name,
+                target_descriptor
+            ),
+        )?;
+        let receiver = caller.pop_object_ref()?;
+        let receiver_class_name = self.heap.instance_class_name(receiver)?.to_string();
+        let (declaring_class_file, declaring_method) = self.resolve_interface_method(
+            method.class_name,
+            &target_method_name,
+            &target_descriptor,
+        )?;
+        let (target_class_file, target_method) = if declaring_method.is_private() {
+            (declaring_class_file, declaring_method)
+        } else if let Some(class_file) = self.find_instance_method_class(
+            &receiver_class_name,
+            &target_method_name,
+            &target_descriptor,
+        )? {
+            let method = class_file
+                .find_method(&target_method_name, &target_descriptor)
+                .ok_or_else(|| {
+                    let target_name = format!(
+                        "{}.{}{}",
+                        class_file.this_class.replace('/', "."),
+                        target_method_name,
+                        target_descriptor
+                    );
+                    JayError::new(format!("invokeinterface target {target_name} not found"))
+                })?
+                .clone();
+            (class_file, method)
+        } else {
+            (declaring_class_file, declaring_method)
+        };
+        let target_name = format!(
+            "{}.{}{}",
+            target_class_file.this_class.replace('/', "."),
+            target_method_name,
+            target_descriptor
+        );
+
+        if target_method.is_static() {
+            return Err(JayError::new(format!(
+                "invokeinterface target {target_name} must not be static"
+            )));
+        }
+
+        if target_method.access_flags & 0x0100 != 0 || target_method.access_flags & 0x0400 != 0 {
+            return Err(JayError::new(format!(
+                "invokeinterface target {target_name} must not be native or abstract"
+            )));
+        }
+
+        let code = target_method
+            .code
+            .as_ref()
+            .ok_or_else(|| {
+                JayError::new(format!("invokeinterface target {target_name} has no Code"))
+            })?
+            .clone();
+
+        arguments.insert(0, Value::Reference(receiver));
+        let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
+        self.saved_roots
+            .push(caller.roots().cloned().collect::<Vec<_>>());
+        let result = self.execute(&target_class_file, &code, &mut callee);
+        self.saved_roots.pop();
+        self.complete_call(
+            caller,
+            descriptor.return_type,
+            result?,
+            &format!("invokeinterface target {target_name}"),
+        )
+    }
+
     fn invoke_static(
         &mut self,
         caller_class_file: &ClassFile,
@@ -714,6 +961,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
         )
     }
 
+    fn check_cast(&self, class_file: &ClassFile, frame: &mut Frame, index: u16) -> JayResult<()> {
+        let class_name = class_file.constant_pool.class_name(index)?;
+        let expected_type = descriptors::ValueType::Reference(class_name.to_string());
+        let value = frame.pop_reference()?;
+        self.validate_value_type(
+            &value,
+            &expected_type,
+            &format!("checkcast target {}", class_name.replace('/', ".")),
+            "checked",
+        )?;
+        frame.stack.push(value);
+        Ok(())
+    }
+
     fn load_class_file(&self, internal_class_name: &str) -> JayResult<ClassFile> {
         let binary_name = internal_class_name.replace('/', ".");
         let bytes = self.classes.load_class_bytes(&binary_name)?;
@@ -726,21 +987,32 @@ impl<'a, W: Write> Interpreter<'a, W> {
         method_name: &str,
         descriptor: &str,
     ) -> JayResult<ClassFile> {
+        self.find_instance_method_class(receiver_class_name, method_name, descriptor)?
+            .ok_or_else(|| {
+                JayError::new(format!(
+                    "invokevirtual target {}.{}{} not found",
+                    receiver_class_name.replace('/', "."),
+                    method_name,
+                    descriptor
+                ))
+            })
+    }
+
+    fn find_instance_method_class(
+        &self,
+        receiver_class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> JayResult<Option<ClassFile>> {
         let mut next_class_name = Some(receiver_class_name.to_string());
         while let Some(class_name) = next_class_name {
             let class_file = self.load_class_file(&class_name)?;
             if class_file.find_method(method_name, descriptor).is_some() {
-                return Ok(class_file);
+                return Ok(Some(class_file));
             }
             next_class_name = class_file.super_class.clone();
         }
-
-        Err(JayError::new(format!(
-            "invokevirtual target {}.{}{} not found",
-            receiver_class_name.replace('/', "."),
-            method_name,
-            descriptor
-        )))
+        Ok(None)
     }
 
     /// Resolves an instance method reference against the symbolic owner class hierarchy.
@@ -766,19 +1038,63 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Ok((class_file, method))
     }
 
-    fn resolve_instance_field_class(
+    /// Resolves an interface method reference against the symbolic owner interface hierarchy.
+    fn resolve_interface_method(
+        &self,
+        owner_interface_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> JayResult<(ClassFile, Method)> {
+        let mut pending = vec![owner_interface_name.to_string()];
+        let mut visited = HashSet::new();
+        while let Some(interface_name) = pending.pop() {
+            if !visited.insert(interface_name.clone()) {
+                continue;
+            }
+
+            let class_file = self.load_class_file(&interface_name)?;
+            if let Some(method) = class_file.find_method(method_name, descriptor) {
+                let method = method.clone();
+                return Ok((class_file, method));
+            }
+
+            for super_interface in class_file.interfaces.iter().rev() {
+                pending.push(super_interface.to_string());
+            }
+        }
+
+        Err(JayError::new(format!(
+            "invokeinterface target {}.{}{} not found",
+            owner_interface_name.replace('/', "."),
+            method_name,
+            descriptor
+        )))
+    }
+
+    fn resolve_field_class(
         &self,
         class_name: &str,
         field_name: &str,
         field_descriptor: &str,
     ) -> JayResult<String> {
-        let mut next_class_name = Some(class_name.to_string());
-        while let Some(candidate_class_name) = next_class_name {
+        let mut pending_class_names = vec![class_name.to_string()];
+        let mut visited = HashSet::new();
+        while let Some(candidate_class_name) = pending_class_names.pop() {
+            if !visited.insert(candidate_class_name.clone()) {
+                continue;
+            }
             let class_file = self.load_class_file(&candidate_class_name)?;
             if class_file.has_field(field_name, field_descriptor) {
                 return Ok(class_file.this_class);
             }
-            next_class_name = class_file.super_class;
+
+            if let Some(super_class) = class_file.super_class {
+                pending_class_names.push(super_class);
+            }
+
+            for interface in class_file.interfaces.iter().rev() {
+                pending_class_names.push(interface.to_string());
+            }
         }
 
         Err(JayError::new(format!(
@@ -952,10 +1268,73 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .iter()
             .flatten()
             .cloned()
+            .chain(self.static_fields.values().cloned())
             .chain(current_frame.roots().cloned())
             .collect::<Vec<_>>();
         self.heap.collect(roots.iter());
     }
+
+    fn initialize_class(&mut self, class_name: &str, current_frame: &Frame) -> JayResult<()> {
+        if self.initialized_classes.contains(class_name)
+            || self.initializing_classes.contains(class_name)
+        {
+            return Ok(());
+        }
+
+        let class_file = self.load_class_file(class_name)?;
+        self.initializing_classes.insert(class_name.to_string());
+        let result = if let Some(super_class) = class_file.super_class.as_deref() {
+            self.initialize_class(super_class, current_frame)
+                .and_then(|_| self.execute_class_initializer(&class_file, current_frame))
+        } else {
+            self.execute_class_initializer(&class_file, current_frame)
+        };
+        self.initializing_classes.remove(class_name);
+        result?;
+        self.initialized_classes.insert(class_name.to_string());
+        Ok(())
+    }
+
+    fn execute_class_initializer(
+        &mut self,
+        class_file: &ClassFile,
+        current_frame: &Frame,
+    ) -> JayResult<()> {
+        let Some(method) = class_file.find_method("<clinit>", "()V") else {
+            return Ok(());
+        };
+
+        if !method.is_static() {
+            return Err(JayError::new(format!(
+                "class initializer for {} must be static",
+                class_file.this_class.replace('/', ".")
+            )));
+        }
+
+        let code = method.code.as_ref().ok_or_else(|| {
+            JayError::new(format!(
+                "class initializer for {} has no Code",
+                class_file.this_class.replace('/', ".")
+            ))
+        })?;
+
+        let mut frame = Frame::new(code.max_locals);
+        self.saved_roots
+            .push(current_frame.roots().cloned().collect::<Vec<_>>());
+        let result = self.execute(class_file, code, &mut frame);
+        self.saved_roots.pop();
+        match result? {
+            None => Ok(()),
+            Some(_) => Err(JayError::new(format!(
+                "class initializer for {} returned a value",
+                class_file.this_class.replace('/', ".")
+            ))),
+        }
+    }
+}
+
+fn checked_array_index(index: i32) -> JayResult<usize> {
+    usize::try_from(index).map_err(|_| JayError::new(format!("negative array index {index}")))
 }
 
 fn apply_string_concat_recipe(recipe: &str, arguments: &[String]) -> JayResult<String> {
