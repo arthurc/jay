@@ -809,7 +809,88 @@ impl<'a, W: Write> Interpreter<'a, W> {
             ));
         }
 
-        self.invoke_virtual(caller_class_file, caller, index)
+        let method = caller_class_file.constant_pool.method_ref(index)?;
+        let target_method_name = method.name.to_string();
+        let target_descriptor = method.descriptor.to_string();
+        let descriptor = MethodDescriptor::parse(&target_descriptor)?;
+        let mut arguments = self.pop_method_arguments(
+            caller,
+            &descriptor,
+            &format!(
+                "invokeinterface target {}.{}{}",
+                method.class_name.replace('/', "."),
+                target_method_name,
+                target_descriptor
+            ),
+        )?;
+        let receiver = caller.pop_object_ref()?;
+        let receiver_class_name = self.heap.instance_class_name(receiver)?.to_string();
+        let (declaring_class_file, declaring_method) = self.resolve_interface_method(
+            method.class_name,
+            &target_method_name,
+            &target_descriptor,
+        )?;
+        let (target_class_file, target_method) = if declaring_method.is_private() {
+            (declaring_class_file, declaring_method)
+        } else {
+            let class_file = self.resolve_instance_method_class(
+                &receiver_class_name,
+                &target_method_name,
+                &target_descriptor,
+            )?;
+            let method = class_file
+                .find_method(&target_method_name, &target_descriptor)
+                .ok_or_else(|| {
+                    let target_name = format!(
+                        "{}.{}{}",
+                        class_file.this_class.replace('/', "."),
+                        target_method_name,
+                        target_descriptor
+                    );
+                    JayError::new(format!("invokeinterface target {target_name} not found"))
+                })?
+                .clone();
+            (class_file, method)
+        };
+        let target_name = format!(
+            "{}.{}{}",
+            target_class_file.this_class.replace('/', "."),
+            target_method_name,
+            target_descriptor
+        );
+
+        if target_method.is_static() {
+            return Err(JayError::new(format!(
+                "invokeinterface target {target_name} must not be static"
+            )));
+        }
+
+        if target_method.access_flags & 0x0100 != 0 || target_method.access_flags & 0x0400 != 0 {
+            return Err(JayError::new(format!(
+                "invokeinterface target {target_name} must not be native or abstract"
+            )));
+        }
+
+        let code = target_method
+            .code
+            .as_ref()
+            .ok_or_else(|| {
+                JayError::new(format!("invokeinterface target {target_name} has no Code"))
+            })?
+            .clone();
+
+        arguments.insert(0, Value::Reference(receiver));
+        let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
+        self.saved_roots
+            .push(caller.roots().cloned().collect::<Vec<_>>());
+        let result = self.execute(&target_class_file, &code, &mut callee);
+        self.saved_roots.pop();
+        self.complete_call(
+            caller,
+            descriptor.return_type,
+            result?,
+            &format!("invokeinterface target {target_name}"),
+        )
     }
 
     fn invoke_static(
@@ -943,6 +1024,39 @@ impl<'a, W: Write> Interpreter<'a, W> {
             })?
             .clone();
         Ok((class_file, method))
+    }
+
+    /// Resolves an interface method reference against the symbolic owner interface hierarchy.
+    fn resolve_interface_method(
+        &self,
+        owner_interface_name: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> JayResult<(ClassFile, Method)> {
+        let mut pending = vec![owner_interface_name.to_string()];
+        let mut visited = HashSet::new();
+        while let Some(interface_name) = pending.pop() {
+            if !visited.insert(interface_name.clone()) {
+                continue;
+            }
+
+            let class_file = self.load_class_file(&interface_name)?;
+            if let Some(method) = class_file.find_method(method_name, descriptor) {
+                let method = method.clone();
+                return Ok((class_file, method));
+            }
+
+            for super_interface in class_file.interfaces.iter().rev() {
+                pending.push(super_interface.to_string());
+            }
+        }
+
+        Err(JayError::new(format!(
+            "invokeinterface target {}.{}{} not found",
+            owner_interface_name.replace('/', "."),
+            method_name,
+            descriptor
+        )))
     }
 
     fn resolve_field_class(

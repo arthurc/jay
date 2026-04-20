@@ -392,6 +392,50 @@ public class Main {
 }
 
 #[test]
+fn invokes_interface_method_declared_on_superinterface() {
+    let root = temp_dir("invokeinterface-superinterface-method");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+interface A {
+    void ping();
+}
+
+interface B extends A {
+}
+
+class Impl implements B {
+    public void ping() {
+        System.out.println("ok");
+    }
+}
+
+public class Main {
+    static void call(B value) {
+        value.ping();
+    }
+
+    public static void main(String[] args) {
+        call(new Impl());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_same_class_instance_int_method() {
     let root = temp_dir("same-class-instance-int-method");
     compile_java(
