@@ -15,3 +15,6 @@ mod objects;
 
 #[path = "jay_integration/static_methods.rs"]
 mod static_methods;
+
+#[path = "jay_integration/class_initialization.rs"]
+mod class_initialization;

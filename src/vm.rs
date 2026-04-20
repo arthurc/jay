@@ -437,6 +437,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let value = frame.pop_field_value(field_type)?;
         let declaring_class_name =
             self.resolve_field_class(field.class_name, field.name, field.descriptor)?;
+        self.initialize_class(&declaring_class_name, frame)?;
         let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
         self.static_fields.insert(field_key, value);
         Ok(())
@@ -1144,12 +1145,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
 
         let class_file = self.load_class_file(class_name)?;
-        if let Some(super_class) = class_file.super_class.as_deref() {
-            self.initialize_class(super_class, current_frame)?;
-        }
-
         self.initializing_classes.insert(class_name.to_string());
-        let result = self.execute_class_initializer(&class_file, current_frame);
+        let result = if let Some(super_class) = class_file.super_class.as_deref() {
+            self.initialize_class(super_class, current_frame)
+                .and_then(|_| self.execute_class_initializer(&class_file, current_frame))
+        } else {
+            self.execute_class_initializer(&class_file, current_frame)
+        };
         self.initializing_classes.remove(class_name);
         result?;
         self.initialized_classes.insert(class_name.to_string());
