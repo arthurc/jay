@@ -166,6 +166,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 0x57 => {
                     let _ = frame.pop()?;
                 }
+                0x58 => self.pop_two_words(frame)?,
                 0x59 => frame.duplicate_top()?,
                 0x5a => frame.duplicate_top_insert_two_down()?,
                 0x60 => {
@@ -1183,6 +1184,24 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
         arguments.reverse();
         Ok(arguments)
+    }
+
+    /// Pops two operand-stack words, matching JVM `pop2` semantics.
+    ///
+    /// If the first popped value is a category-2 value (`long` in this VM), the
+    /// instruction is complete. Otherwise, this pops and discards a second
+    /// category-1 value.
+    fn pop_two_words(&self, frame: &mut Frame) -> JayResult<()> {
+        let first = frame.pop()?;
+        if !matches!(first, Value::Long(_)) {
+            let second = frame.pop()?;
+            if matches!(second, Value::Long(_)) {
+                return Err(JayError::new(
+                    "invalid pop2 operand shape: category-1 value over category-2 value",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn complete_call(
