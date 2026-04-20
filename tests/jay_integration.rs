@@ -18,3 +18,6 @@ mod static_methods;
 
 #[path = "jay_integration/class_initialization.rs"]
 mod class_initialization;
+
+#[path = "jay_integration/errors.rs"]
+mod errors;

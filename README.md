@@ -84,7 +84,8 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 Primitive arrays, string interning, full collection semantics, general
 invokedynamic bootstrap execution, long arithmetic, broad date formatting, and
 general native/JDK method execution are still unsupported. Unsupported bytecode
-or method shapes fail with an explicit error.
+or method shapes fail with an explicit error and an interpreted Java stacktrace
+that names each active class, method descriptor, and bytecode program counter.
 
 ## Development
 

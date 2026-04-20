@@ -9,6 +9,12 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("jay: {error}");
+            for frame in error.java_stack_trace() {
+                eprintln!(
+                    "  at {}.{}{} (pc {})",
+                    frame.class_name, frame.method_name, frame.descriptor, frame.pc
+                );
+            }
             ExitCode::FAILURE
         }
     }
