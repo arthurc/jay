@@ -1,4 +1,4 @@
-use crate::support::{compile_java, compile_java_sources, jay, temp_dir};
+use crate::support::{compile_java, compile_java_sources, jay, replace_utf8_constant, temp_dir};
 
 #[test]
 fn runs_simple_object_construction() {
@@ -237,6 +237,118 @@ public class Main {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "instance\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn rejects_reference_arguments_that_do_not_match_descriptor_type() {
+    let root = temp_dir("rejects-reference-argument-type-mismatch");
+    compile_java_sources(
+        &root,
+        &[
+            (
+                "Helper.java",
+                r#"
+class Helper {
+    static Object identity(Object value) {
+        return value;
+    }
+}
+"#,
+            ),
+            (
+                "Box.java",
+                r#"
+class Box {
+}
+"#,
+            ),
+            (
+                "Main.java",
+                r#"
+public class Main {
+    public static void main(String[] args) {
+        Helper.identity(new Box());
+    }
+}
+"#,
+            ),
+        ],
+    );
+
+    replace_utf8_constant(
+        &root,
+        "Helper.class",
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+        "(Ljava/lang/String;)Ljava/lang/Object;",
+    );
+    replace_utf8_constant(
+        &root,
+        "Main.class",
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+        "(Ljava/lang/String;)Ljava/lang/Object;",
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(!output.status.success(), "jay unexpectedly succeeded");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("invokestatic target Helper.identity(Ljava/lang/String;)Ljava/lang/Object; received Box, expected java.lang.String")
+    );
+}
+
+#[test]
+fn rejects_reference_returns_that_do_not_match_descriptor_type() {
+    let root = temp_dir("rejects-reference-return-type-mismatch");
+    compile_java_sources(
+        &root,
+        &[
+            (
+                "Helper.java",
+                r#"
+class Box {
+}
+
+class Helper {
+    static Object make() {
+        return new Box();
+    }
+}
+"#,
+            ),
+            (
+                "Main.java",
+                r#"
+public class Main {
+    public static void main(String[] args) {
+        Helper.make();
+    }
+}
+"#,
+            ),
+        ],
+    );
+
+    replace_utf8_constant(
+        &root,
+        "Helper.class",
+        "()Ljava/lang/Object;",
+        "()Ljava/lang/String;",
+    );
+    replace_utf8_constant(
+        &root,
+        "Main.class",
+        "()Ljava/lang/Object;",
+        "()Ljava/lang/String;",
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(!output.status.success(), "jay unexpectedly succeeded");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("invokestatic target Helper.make()Ljava/lang/String; returned Box, expected java.lang.String")
+    );
 }
 
 #[test]

@@ -63,13 +63,6 @@ impl ValueType {
         }
     }
 
-    pub(super) fn is_same_category_as(&self, other: &Self) -> bool {
-        matches!(
-            (self, other),
-            (ValueType::Int, ValueType::Int) | (ValueType::Reference(_), ValueType::Reference(_))
-        )
-    }
-
     pub(super) fn is_reference_to(&self, class_name: &str) -> bool {
         matches!(self, ValueType::Reference(reference) if reference == class_name)
     }

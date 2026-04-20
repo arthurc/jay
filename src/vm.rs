@@ -390,7 +390,16 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let target_method_name = method.name.to_string();
         let target_descriptor = method.descriptor.to_string();
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
-        let mut arguments = self.pop_method_arguments(frame, &descriptor)?;
+        let mut arguments = self.pop_method_arguments(
+            frame,
+            &descriptor,
+            &format!(
+                "invokevirtual target {}.{}{}",
+                method.class_name.replace('/', "."),
+                target_method_name,
+                target_descriptor
+            ),
+        )?;
         let receiver = frame.pop_object_ref()?;
         let receiver_class_name = self.heap.instance_class_name(receiver)?.to_string();
         let (declaring_class_file, declaring_method) = self.resolve_instance_method(
@@ -492,7 +501,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
 
         if target_class_name == "java/lang/Object" && target_descriptor == "()V" {
-            self.pop_constructor_arguments(caller, &descriptor)?;
+            self.pop_constructor_arguments(
+                caller,
+                &descriptor,
+                &format!("invokespecial constructor target {target_name}"),
+            )?;
             let _receiver = caller.pop_reference()?;
             return Ok(());
         }
@@ -532,7 +545,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
             })?
             .clone();
 
-        let mut arguments = self.pop_constructor_arguments(caller, &descriptor)?;
+        let mut arguments = self.pop_constructor_arguments(
+            caller,
+            &descriptor,
+            &format!("invokespecial constructor target {target_name}"),
+        )?;
         let receiver = caller.pop_reference()?;
         arguments.insert(0, receiver);
 
@@ -609,7 +626,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         };
         let recipe = class_file.constant_pool.string(*recipe_index)?.to_string();
-        let arguments = self.pop_method_arguments(frame, &descriptor)?;
+        let arguments = self.pop_method_arguments(
+            frame,
+            &descriptor,
+            &format!(
+                "invokedynamic call site {}{}",
+                dynamic.name, dynamic.descriptor
+            ),
+        )?;
         let mut text_arguments = Vec::with_capacity(arguments.len());
         for argument in arguments {
             text_arguments.push(self.string_concat_argument(argument)?);
@@ -671,7 +695,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} has no Code")))?
             .clone();
 
-        let arguments = self.pop_method_arguments(caller, &descriptor)?;
+        let arguments = self.pop_method_arguments(
+            caller,
+            &descriptor,
+            &format!("invokestatic target {target_name}"),
+        )?;
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
         self.saved_roots
             .push(caller.roots().cloned().collect::<Vec<_>>());
@@ -764,10 +792,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
         &self,
         caller: &mut Frame,
         descriptor: &MethodDescriptor,
+        target_description: &str,
     ) -> JayResult<Vec<Value>> {
         let mut arguments = Vec::with_capacity(descriptor.parameter_types.len());
         for parameter_type in descriptor.parameter_types.iter().rev() {
-            arguments.push(caller.pop_value_of_type(parameter_type)?);
+            let value = caller.pop_value_of_type(parameter_type)?;
+            self.validate_value_type(&value, parameter_type, target_description, "received")?;
+            arguments.push(value);
         }
         arguments.reverse();
         Ok(arguments)
@@ -787,7 +818,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             ))),
             (ReturnType::Type(return_type), Some(value)) => {
                 if let Some(actual_type) = value.value_type(&self.heap)?
-                    && return_type.is_same_category_as(&actual_type)
+                    && self.is_assignable_type(&actual_type, &return_type)?
                 {
                     caller.stack.push(value);
                     Ok(())
@@ -821,13 +852,72 @@ impl<'a, W: Write> Interpreter<'a, W> {
         &self,
         caller: &mut Frame,
         descriptor: &MethodDescriptor,
+        target_description: &str,
     ) -> JayResult<Vec<Value>> {
         let mut arguments = Vec::with_capacity(descriptor.parameter_types.len());
         for parameter_type in descriptor.parameter_types.iter().rev() {
-            arguments.push(caller.pop_value_of_type(parameter_type)?);
+            let value = caller.pop_value_of_type(parameter_type)?;
+            self.validate_value_type(&value, parameter_type, target_description, "received")?;
+            arguments.push(value);
         }
         arguments.reverse();
         Ok(arguments)
+    }
+
+    fn validate_value_type(
+        &self,
+        value: &Value,
+        expected_type: &descriptors::ValueType,
+        target_description: &str,
+        action: &str,
+    ) -> JayResult<()> {
+        if let Some(actual_type) = value.value_type(&self.heap)?
+            && self.is_assignable_type(&actual_type, expected_type)?
+        {
+            return Ok(());
+        }
+
+        Err(JayError::new(format!(
+            "{target_description} {action} {}, expected {}",
+            value.type_name(&self.heap)?,
+            expected_type.name()
+        )))
+    }
+
+    fn is_assignable_type(
+        &self,
+        actual: &descriptors::ValueType,
+        expected: &descriptors::ValueType,
+    ) -> JayResult<bool> {
+        match (actual, expected) {
+            (descriptors::ValueType::Int, descriptors::ValueType::Int) => Ok(true),
+            (
+                descriptors::ValueType::Reference(actual_class),
+                descriptors::ValueType::Reference(expected_class),
+            ) => self.is_assignable_reference(actual_class, expected_class),
+            _ => Ok(false),
+        }
+    }
+
+    fn is_assignable_reference(&self, actual_class: &str, expected_class: &str) -> JayResult<bool> {
+        if actual_class == expected_class || expected_class == "java/lang/Object" {
+            return Ok(true);
+        }
+
+        if actual_class == "java/lang/String" {
+            return Ok(false);
+        }
+
+        let mut next_class_name = Some(actual_class.to_string());
+        while let Some(class_name) = next_class_name {
+            let class_file = self.load_class_file(&class_name)?;
+            if class_file.this_class == expected_class {
+                return Ok(true);
+            }
+            next_class_name = class_file.super_class;
+        }
+
+        Ok(false)
     }
 
     fn collect_if_needed(&mut self, current_frame: &Frame) {
