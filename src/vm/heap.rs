@@ -105,8 +105,10 @@ impl Heap {
 
     pub(super) fn value_type(&self, reference: ObjectRef) -> JayResult<Option<ValueType>> {
         match self.object(reference)?.kind {
-            ObjectKind::String(_) => Ok(Some(ValueType::String)),
-            ObjectKind::Instance { .. } => Ok(None),
+            ObjectKind::String(_) => Ok(Some(ValueType::Reference("java/lang/String".to_string()))),
+            ObjectKind::Instance { ref class_name, .. } => {
+                Ok(Some(ValueType::Reference(class_name.clone())))
+            }
         }
     }
 
@@ -247,7 +249,10 @@ mod tests {
 
         let reference = heap.allocate_instance("example/Empty");
 
-        assert_eq!(heap.value_type(reference).unwrap(), None);
+        assert_eq!(
+            heap.value_type(reference).unwrap(),
+            Some(ValueType::Reference("example/Empty".to_string()))
+        );
         assert_eq!(heap.type_name(reference).unwrap(), "example.Empty");
         assert!(
             heap.string(reference)

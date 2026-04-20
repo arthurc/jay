@@ -168,14 +168,10 @@ impl Frame {
         }
     }
 
-    pub(super) fn pop_value_of_type(
-        &mut self,
-        value_type: ValueType,
-        heap: &Heap,
-    ) -> JayResult<Value> {
+    pub(super) fn pop_value_of_type(&mut self, value_type: &ValueType) -> JayResult<Value> {
         match value_type {
             ValueType::Int => Ok(Value::Int(self.pop_int()?)),
-            ValueType::String => Ok(Value::Reference(self.pop_string_reference(heap)?)),
+            ValueType::Reference(_) => self.pop_reference(),
         }
     }
 
@@ -222,19 +218,18 @@ mod tests {
     }
 
     #[test]
-    fn string_type_errors_still_name_expected_string_values() {
-        let heap = Heap::new();
+    fn reference_type_errors_still_name_expected_reference_values() {
         let mut frame = Frame::new(0);
         frame.stack.push(Value::Int(42));
 
         let error = frame
-            .pop_value_of_type(ValueType::String, &heap)
+            .pop_value_of_type(&ValueType::Reference("java/lang/String".to_string()))
             .unwrap_err();
 
         assert!(
             error
                 .to_string()
-                .contains("expected string on stack, found Int(42)")
+                .contains("expected reference on stack, found Int(42)")
         );
     }
 }

@@ -49,7 +49,7 @@ mod tests {
 
         assert_eq!(
             Value::Reference(reference).value_type(&heap).unwrap(),
-            Some(ValueType::String)
+            Some(ValueType::Reference("java/lang/String".to_string()))
         );
     }
 }

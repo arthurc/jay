@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use bytecode::{
     branch_target, int_branch_taken, int_compare_branch_taken, read_i2, read_u1, read_u2,
 };
-use descriptors::{FieldType, MethodDescriptor, ReturnType, ValueType, parse_field_descriptor};
+use descriptors::{FieldType, MethodDescriptor, ReturnType, parse_field_descriptor};
 use frame::Frame;
 use heap::{FieldKey, Heap};
 use value::Value;
@@ -595,7 +595,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
 
         let descriptor = MethodDescriptor::parse(dynamic.descriptor)?;
-        if descriptor.return_type != ReturnType::Type(ValueType::String) {
+        if !descriptor.return_type.is_reference_to("java/lang/String") {
             return Err(JayError::new(format!(
                 "unsupported invokedynamic return type in {}{}",
                 dynamic.name, dynamic.descriptor
@@ -767,7 +767,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<Vec<Value>> {
         let mut arguments = Vec::with_capacity(descriptor.parameter_types.len());
         for parameter_type in descriptor.parameter_types.iter().rev() {
-            arguments.push(caller.pop_value_of_type(*parameter_type, &self.heap)?);
+            arguments.push(caller.pop_value_of_type(parameter_type)?);
         }
         arguments.reverse();
         Ok(arguments)
@@ -785,17 +785,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
             (ReturnType::Void, Some(_)) => Err(JayError::new(format!(
                 "{target_description} returned a value from void method"
             ))),
-            (ReturnType::Type(return_type), Some(value))
-                if value.value_type(&self.heap)? == Some(return_type) =>
-            {
-                caller.stack.push(value);
-                Ok(())
+            (ReturnType::Type(return_type), Some(value)) => {
+                if let Some(actual_type) = value.value_type(&self.heap)?
+                    && return_type.is_same_category_as(&actual_type)
+                {
+                    caller.stack.push(value);
+                    Ok(())
+                } else {
+                    Err(JayError::new(format!(
+                        "{target_description} returned {}, expected {}",
+                        value.type_name(&self.heap)?,
+                        return_type.name()
+                    )))
+                }
             }
-            (ReturnType::Type(return_type), Some(other)) => Err(JayError::new(format!(
-                "{target_description} returned {}, expected {}",
-                other.type_name(&self.heap)?,
-                return_type.name()
-            ))),
             (ReturnType::Type(return_type), None) => Err(JayError::new(format!(
                 "{target_description} returned void from {} method",
                 return_type.name()
@@ -821,7 +824,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<Vec<Value>> {
         let mut arguments = Vec::with_capacity(descriptor.parameter_types.len());
         for parameter_type in descriptor.parameter_types.iter().rev() {
-            arguments.push(caller.pop_value_of_type(*parameter_type, &self.heap)?);
+            arguments.push(caller.pop_value_of_type(parameter_type)?);
         }
         arguments.reverse();
         Ok(arguments)

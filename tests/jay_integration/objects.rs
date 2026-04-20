@@ -74,6 +74,51 @@ public class Main {
 }
 
 #[test]
+fn runs_constructor_with_object_reference_parameter() {
+    let root = temp_dir("constructor-object-reference-parameter");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Engine {
+    String serial;
+
+    Engine(String serial) {
+        this.serial = serial;
+    }
+}
+
+class Car {
+    Engine engine;
+
+    Car(Engine engine) {
+        this.engine = engine;
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Engine engine = new Engine("E-123");
+        Car car = new Car(engine);
+        System.out.println(car.engine.serial);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "E-123\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_instance_field_reads() {
     let root = temp_dir("instance-field-reads");
     compile_java(
@@ -106,6 +151,91 @@ public class Main {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Toyota\n2020\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_static_method_with_object_reference_parameter_and_return() {
+    let root = temp_dir("static-object-reference-parameter-return");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Box {
+    String value;
+
+    Box(String value) {
+        this.value = value;
+    }
+}
+
+class Boxes {
+    static Box identity(Box box) {
+        return box;
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Box box = new Box("static");
+        System.out.println(Boxes.identity(box).value);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "static\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_instance_method_with_object_reference_parameter_and_return() {
+    let root = temp_dir("instance-object-reference-parameter-return");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Box {
+    String value;
+
+    Box(String value) {
+        this.value = value;
+    }
+}
+
+class Echo {
+    Box identity(Box box) {
+        return box;
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Box box = new Box("instance");
+        Echo echo = new Echo();
+        System.out.println(echo.identity(box).value);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "instance\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
 

@@ -41,23 +41,45 @@ impl MethodDescriptor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ReturnType {
     Void,
     Type(ValueType),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Single-slot values currently accepted in method descriptors.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ValueType {
     Int,
-    String,
+    /// An object reference descriptor such as `Ljava/lang/String;` or `Lexample/Box;`.
+    Reference(String),
 }
 
 impl ValueType {
-    pub(super) fn name(self) -> &'static str {
+    pub(super) fn name(&self) -> String {
         match self {
-            ValueType::Int => "int",
-            ValueType::String => "String",
+            ValueType::Int => "int".to_string(),
+            ValueType::Reference(class_name) => class_name.replace('/', "."),
+        }
+    }
+
+    pub(super) fn is_same_category_as(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (ValueType::Int, ValueType::Int) | (ValueType::Reference(_), ValueType::Reference(_))
+        )
+    }
+
+    pub(super) fn is_reference_to(&self, class_name: &str) -> bool {
+        matches!(self, ValueType::Reference(reference) if reference == class_name)
+    }
+}
+
+impl ReturnType {
+    pub(super) fn is_reference_to(&self, class_name: &str) -> bool {
+        match self {
+            ReturnType::Void => false,
+            ReturnType::Type(value_type) => value_type.is_reference_to(class_name),
         }
     }
 }
@@ -103,20 +125,27 @@ fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueTyp
         return Ok((ValueType::Int, remaining));
     }
 
-    if let Some(remaining) = input.strip_prefix("Ljava/lang/String;") {
-        return Ok((ValueType::String, remaining));
-    }
-
     if input.starts_with('[') {
         return Err(JayError::new(format!(
             "unsupported array type in method descriptor {descriptor}"
         )));
     }
 
-    if input.starts_with('L') {
-        return Err(JayError::new(format!(
-            "unsupported object type in method descriptor {descriptor}"
-        )));
+    if let Some(reference_type) = input.strip_prefix('L') {
+        let Some(end_index) = reference_type.find(';') else {
+            return Err(JayError::new(format!(
+                "invalid method descriptor {descriptor}"
+            )));
+        };
+        if end_index == 0 {
+            return Err(JayError::new(format!(
+                "invalid method descriptor {descriptor}"
+            )));
+        }
+
+        let class_name = reference_type[..end_index].to_string();
+        let remaining = &reference_type[end_index + 1..];
+        return Ok((ValueType::Reference(class_name), remaining));
     }
 
     Err(JayError::new(format!(
@@ -182,14 +211,20 @@ mod tests {
         let descriptor = MethodDescriptor::parse("()Ljava/lang/String;").unwrap();
 
         assert_eq!(descriptor.parameter_types, Vec::new());
-        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::String));
+        assert_eq!(
+            descriptor.return_type,
+            ReturnType::Type(ValueType::Reference("java/lang/String".to_string()))
+        );
     }
 
     #[test]
     fn parses_string_parameter_method_descriptors() {
         let descriptor = MethodDescriptor::parse("(Ljava/lang/String;)V").unwrap();
 
-        assert_eq!(descriptor.parameter_types, vec![ValueType::String]);
+        assert_eq!(
+            descriptor.parameter_types,
+            vec![ValueType::Reference("java/lang/String".to_string())]
+        );
         assert_eq!(descriptor.return_type, ReturnType::Void);
     }
 
@@ -199,16 +234,26 @@ mod tests {
 
         assert_eq!(
             descriptor.parameter_types,
-            vec![ValueType::Int, ValueType::String]
+            vec![
+                ValueType::Int,
+                ValueType::Reference("java/lang/String".to_string())
+            ]
         );
         assert_eq!(descriptor.return_type, ReturnType::Void);
     }
 
     #[test]
-    fn rejects_unsupported_object_method_descriptors() {
-        let error = MethodDescriptor::parse("(Ljava/lang/Object;)V").unwrap_err();
+    fn parses_object_reference_method_descriptors() {
+        let descriptor = MethodDescriptor::parse("(Lexample/Box;)Lexample/Box;").unwrap();
 
-        assert!(error.to_string().contains("unsupported object type"));
+        assert_eq!(
+            descriptor.parameter_types,
+            vec![ValueType::Reference("example/Box".to_string())]
+        );
+        assert_eq!(
+            descriptor.return_type,
+            ReturnType::Type(ValueType::Reference("example/Box".to_string()))
+        );
     }
 
     #[test]
