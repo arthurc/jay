@@ -1,0 +1,393 @@
+use crate::support::{compile_java, compile_java_sources, jay, temp_dir};
+
+#[test]
+fn runs_simple_object_construction() {
+    let root = temp_dir("simple-object-construction");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Empty {
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Empty value = new Empty();
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_instance_field_assignments() {
+    let root = temp_dir("instance-field-assignments");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Car {
+    String make;
+    int year;
+
+    Car(String make, int year) {
+        this.make = make;
+        this.year = year;
+    }
+}
+
+class Garage {
+    Car car;
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Car car = new Car("Toyota", 2020);
+        Garage garage = new Garage();
+        garage.car = car;
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_instance_field_reads() {
+    let root = temp_dir("instance-field-reads");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Car {
+    String make;
+    int year;
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Car car = new Car();
+        car.make = "Toyota";
+        car.year = 2020;
+        System.out.println(car.make);
+        System.out.println(car.year);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Toyota\n2020\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_same_class_instance_int_method() {
+    let root = temp_dir("same-class-instance-int-method");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    int add(int left, int right) {
+        return left + right;
+    }
+
+    public static void main(String[] args) {
+        Main value = new Main();
+        System.out.println(value.add(2, 3));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "5\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_cross_class_instance_string_method() {
+    let root = temp_dir("cross-class-instance-string-method");
+    compile_java_sources(
+        &root,
+        &[
+            (
+                "Greeter.java",
+                r#"
+public class Greeter {
+    String message() {
+        return "hello";
+    }
+}
+"#,
+            ),
+            (
+                "Main.java",
+                r#"
+public class Main {
+    public static void main(String[] args) {
+        Greeter greeter = new Greeter();
+        System.out.println(greeter.message());
+    }
+}
+"#,
+            ),
+        ],
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_string_concat_with_string_and_int_values() {
+    let root = temp_dir("string-concat-string-int");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        String make = "Toyota";
+        int year = 2020;
+        System.out.println("Make: " + make);
+        System.out.println("Year: " + year);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Make: Toyota\nYear: 2020\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_instance_method_with_field_reads_and_string_concat() {
+    let root = temp_dir("instance-method-field-read-string-concat");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Car {
+    String make;
+    String model;
+    int year;
+
+    public void displayInfo() {
+        System.out.println("Make: " + make);
+        System.out.println("Model: " + model);
+        System.out.println("Year: " + year);
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Car car = new Car();
+        car.make = "Toyota";
+        car.model = "Corolla";
+        car.year = 2020;
+        car.displayInfo();
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Make: Toyota\nModel: Corolla\nYear: 2020\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn resolves_inherited_instance_fields_to_declaring_class() {
+    let root = temp_dir("inherited-instance-field-resolution");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Parent {
+    int value;
+
+    int read() {
+        return value;
+    }
+}
+
+class Child extends Parent {
+    void set(int next) {
+        value = next;
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Child child = new Child();
+        child.set(7);
+        System.out.println(child.read());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn invokes_private_virtual_targets_without_subclass_dispatch() {
+    let root = temp_dir("private-invokevirtual-no-subclass-dispatch");
+    compile_java_sources(
+        &root,
+        &[
+            (
+                "Parent.java",
+                r#"
+public class Parent {
+    private String marker() {
+        return "A";
+    }
+
+    String callMarker() {
+        return marker();
+    }
+}
+"#,
+            ),
+            (
+                "Child.java",
+                r#"
+public class Child extends Parent {
+    String marker() {
+        return "B";
+    }
+}
+"#,
+            ),
+            (
+                "Main.java",
+                r#"
+public class Main {
+    public static void main(String[] args) {
+        Child child = new Child();
+        System.out.println(child.callMarker());
+        System.out.println(child.marker());
+    }
+}
+"#,
+            ),
+        ],
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "A\nB\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_constructor_expression_statement() {
+    let root = temp_dir("constructor-expression-statement");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Empty {
+}
+
+public class Main {
+    public static void main(String[] args) {
+        new Empty();
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
