@@ -138,3 +138,32 @@ public class ReentrantInitMain {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n1\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
+
+#[test]
+fn class_literal_loads_class_mirror_without_initializing_represented_class() {
+    let root = temp_dir("class-literal-desired-assertion-status");
+    compile_java(
+        &root,
+        "ClassLiteralMain.java",
+        r#"
+class SomeClass {
+    static {
+        System.out.println("initialized");
+    }
+}
+
+public class ClassLiteralMain {
+    public static void main(String[] args) {
+        System.out.println(SomeClass.class == SomeClass.class);
+        System.out.println(SomeClass.class.desiredAssertionStatus());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "ClassLiteralMain"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "true\nfalse\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}

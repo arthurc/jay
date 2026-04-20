@@ -62,6 +62,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Limited heap-allocated `Object[]` arrays with allocation, length, load, and store bytecodes
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
+- Class literals loaded through `ldc` as cached `java.lang.Class` mirrors, with limited `Class.desiredAssertionStatus()` support that reports assertions as disabled
 - Limited `long` constants, local variables, fields, method parameters, and return values, including discarding unused `long` results from calls
 - Integer comparisons, branches, and simple loops
 - Null references in locals, fields, method calls, object arrays, casts, and reference comparison branches

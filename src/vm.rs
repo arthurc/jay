@@ -76,6 +76,8 @@ struct Interpreter<'a, W: Write> {
     heap: Heap,
     saved_roots: Vec<Vec<Value>>,
     static_fields: HashMap<FieldKey, Value>,
+    /// Heap-allocated `java.lang.Class` mirrors loaded by class literals.
+    class_mirrors: HashMap<String, ObjectRef>,
     initialized_classes: HashSet<String>,
     initializing_classes: HashSet<String>,
 }
@@ -118,6 +120,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             heap: Heap::new(),
             saved_roots: Vec::new(),
             static_fields: HashMap::new(),
+            class_mirrors: HashMap::new(),
             initialized_classes: HashSet::new(),
             initializing_classes: HashSet::new(),
         }
@@ -451,6 +454,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Ok(());
         }
 
+        if let Ok(class_name) = constant_pool.class_name(index) {
+            let reference = self.class_mirror(class_name);
+            frame.stack.push(Value::Reference(reference));
+            self.collect_if_needed(frame);
+            return Ok(());
+        }
+
         Err(JayError::new(format!(
             "unsupported ldc constant at pool index #{index}"
         )))
@@ -656,6 +666,23 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     method.descriptor
                 ))),
             };
+        }
+
+        if method.class_name == "java/lang/Class"
+            && method.name == "desiredAssertionStatus"
+            && method.descriptor == "()Z"
+        {
+            let receiver = frame.pop_object_ref()?;
+            let receiver_class_name = self.heap.instance_class_name(receiver)?;
+            if receiver_class_name != "java/lang/Class" {
+                return Err(JayError::new(format!(
+                    "Class.desiredAssertionStatus receiver was {}",
+                    self.heap.type_name(receiver)?
+                )));
+            }
+
+            frame.stack.push(Value::Int(0));
+            return Ok(());
         }
 
         let target_method_name = method.name.to_string();
@@ -1689,9 +1716,21 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .flatten()
             .cloned()
             .chain(self.static_fields.values().cloned())
+            .chain(self.class_mirrors.values().copied().map(Value::Reference))
             .chain(current_frame.roots().cloned())
             .collect::<Vec<_>>();
         self.heap.collect(roots.iter());
+    }
+
+    fn class_mirror(&mut self, class_name: &str) -> ObjectRef {
+        if let Some(reference) = self.class_mirrors.get(class_name) {
+            return *reference;
+        }
+
+        // Class literals load a Class mirror without running the represented class initializer.
+        let reference = self.heap.allocate_instance("java/lang/Class");
+        self.class_mirrors.insert(class_name.to_string(), reference);
+        reference
     }
 
     fn initialize_class(&mut self, class_name: &str, current_frame: &Frame) -> JayResult<()> {
