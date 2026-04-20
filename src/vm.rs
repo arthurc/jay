@@ -1118,6 +1118,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
+        if target_class_name == "java/lang/System"
+            && target_method_name == "registerNatives"
+            && target_descriptor == "()V"
+        {
+            // HotSpot uses this to register VM natives; Jay dispatches supported
+            // native behavior through explicit Rust shims, so there is no table to populate.
+            return Ok(());
+        }
+
         if method.access_flags & 0x0100 != 0 || method.access_flags & 0x0400 != 0 {
             return Err(JayError::new(format!(
                 "invokestatic target {target_name} must not be native or abstract"
