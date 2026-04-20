@@ -33,7 +33,7 @@ enum ObjectKind {
         fields: HashMap<FieldKey, Value>,
     },
     ObjectArray {
-        elements: Vec<Option<Value>>,
+        elements: Vec<Value>,
     },
 }
 
@@ -82,7 +82,7 @@ impl Heap {
 
     pub(super) fn allocate_object_array(&mut self, length: usize) -> ObjectRef {
         self.allocate(ObjectKind::ObjectArray {
-            elements: vec![None; length],
+            elements: vec![Value::Null; length],
         })
     }
 
@@ -206,9 +206,7 @@ impl Heap {
                         elements.len()
                     )));
                 };
-                value
-                    .clone()
-                    .ok_or_else(|| JayError::new("null array elements are unsupported"))
+                Ok(value.clone())
             }
             _ => Err(JayError::new(format!(
                 "expected object array reference, found {}",
@@ -223,7 +221,7 @@ impl Heap {
         index: usize,
         value: Value,
     ) -> JayResult<()> {
-        if !matches!(value, Value::Reference(_)) {
+        if !matches!(value, Value::Reference(_) | Value::Null) {
             return Err(JayError::new(format!(
                 "expected reference for object array store, found {}",
                 value.type_name(self)?
@@ -238,7 +236,7 @@ impl Heap {
                         "array index {index} out of bounds for length {length}"
                     )));
                 };
-                *slot = Some(value);
+                *slot = value;
                 Ok(())
             }
             _ => Err(JayError::new(format!(
@@ -296,11 +294,9 @@ impl Heap {
                 ObjectKind::Instance { ref fields, .. } => {
                     fields.values().filter_map(Value::object_ref).collect()
                 }
-                ObjectKind::ObjectArray { ref elements } => elements
-                    .iter()
-                    .filter_map(|element| element.as_ref())
-                    .filter_map(Value::object_ref)
-                    .collect(),
+                ObjectKind::ObjectArray { ref elements } => {
+                    elements.iter().filter_map(Value::object_ref).collect()
+                }
             }
         };
 
@@ -404,17 +400,11 @@ mod tests {
     }
 
     #[test]
-    fn heap_reports_unset_array_reference_slots_as_unsupported_nulls() {
+    fn heap_loads_unset_array_reference_slots_as_nulls() {
         let mut heap = Heap::new();
         let array = heap.allocate_object_array(1);
 
-        let error = heap.load_array_reference(array, 0).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("null array elements are unsupported")
-        );
+        assert_eq!(heap.load_array_reference(array, 0).unwrap(), Value::Null);
     }
 
     #[test]

@@ -64,7 +64,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
 - Limited `long` constants, local variables, fields, method parameters, and return values, including discarding unused `long` results from calls
 - Integer comparisons, branches, and simple loops
-- Reference comparison branches for non-null references
+- Null references in locals, fields, method calls, object arrays, casts, and reference comparison branches
 - Static fields and class initialization through static class initializers, including `putstatic`-triggered initialization, re-entrant initialization guards, preserving `putstatic` reference values across initializer-triggered GC, and resolving interface fields inherited from superinterfaces
 - Static method calls with `int` and object-reference parameters and `int`, object-reference, or `void` return values
 - Same-class and cross-class static method calls
@@ -77,14 +77,14 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Private instance method calls invoked with `invokevirtual` resolve to the declaring class (no subclass override dispatch)
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
 - Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
-- `System.currentTimeMillis()` as a focused native shim for simple `java.util.Date` construction
+- Focused date shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, and `SimpleDateFormat("hh.mm aa").format(Date)` using GMT/UTC formatting
 - Constructor expression statements (for example `new Empty();`)
 - Class files up to the parser's supported class file version range
 
-Primitive arrays, null references, string interning, full collection semantics,
-general invokedynamic bootstrap execution, long arithmetic, broad date
-formatting, and general native/JDK method execution are still unsupported.
-Unsupported bytecode or method shapes fail with an explicit error.
+Primitive arrays, string interning, full collection semantics, general
+invokedynamic bootstrap execution, long arithmetic, broad date formatting, and
+general native/JDK method execution are still unsupported. Unsupported bytecode
+or method shapes fail with an explicit error.
 
 ## Development
 
