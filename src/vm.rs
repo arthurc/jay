@@ -685,6 +685,12 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             return self.invoke_simple_date_format(frame, receiver, &arguments);
         }
+        if target_method_name == "setTimeZone"
+            && target_descriptor == "(Ljava/util/TimeZone;)V"
+            && receiver_class_name == "java/text/SimpleDateFormat"
+        {
+            return self.invoke_simple_date_format_set_time_zone(receiver, &arguments);
+        }
         let (declaring_class_file, declaring_method) = self.resolve_instance_method(
             method.class_name,
             &target_method_name,
@@ -1057,6 +1063,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
             caller.stack.push(Value::Long(current_time_millis()?));
             return Ok(());
         }
+        if target_class_name == "java/util/TimeZone"
+            && target_method_name == "getTimeZone"
+            && target_descriptor == "(Ljava/lang/String;)Ljava/util/TimeZone;"
+        {
+            let descriptor = MethodDescriptor::parse(&target_descriptor)?;
+            return self.invoke_time_zone_get_time_zone(caller, &descriptor, &target_name);
+        }
 
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
         let loaded_class_file;
@@ -1128,6 +1141,46 @@ impl<'a, W: Write> Interpreter<'a, W> {
         ClassFile::parse(&bytes)
     }
 
+    fn invoke_time_zone_get_time_zone(
+        &mut self,
+        caller: &mut Frame,
+        descriptor: &MethodDescriptor,
+        target_name: &str,
+    ) -> JayResult<()> {
+        let arguments = self.pop_method_arguments(
+            caller,
+            descriptor,
+            &format!("invokestatic target {target_name}"),
+        )?;
+        let [id] = arguments.as_slice() else {
+            return Err(JayError::new(
+                "TimeZone.getTimeZone expected one ID argument",
+            ));
+        };
+        let Value::Reference(id) = id else {
+            return Err(JayError::new("TimeZone.getTimeZone received null ID"));
+        };
+
+        let requested_id = self.heap.string(*id)?.to_string();
+        let time_zone = native::TimeZone::from_id(&requested_id);
+        let id_reference = self.heap.allocate_string(time_zone.id());
+        let reference = self.heap.allocate_instance("java/util/TimeZone");
+
+        self.heap.put_instance_field(
+            reference,
+            time_zone_id_field(),
+            Value::Reference(id_reference),
+        )?;
+        self.heap.put_instance_field(
+            reference,
+            time_zone_offset_field(),
+            Value::Long(time_zone.offset_millis()),
+        )?;
+        caller.stack.push(Value::Reference(reference));
+        self.collect_if_needed(caller);
+        Ok(())
+    }
+
     fn invoke_date_to_string(&mut self, caller: &mut Frame, receiver: ObjectRef) -> JayResult<()> {
         let fast_time = self.date_fast_time(receiver)?;
         let reference = self.heap.allocate_string(native::date_to_string(fast_time));
@@ -1152,12 +1205,36 @@ impl<'a, W: Write> Interpreter<'a, W> {
         };
 
         let pattern = self.simple_date_format_pattern(receiver)?;
+        let time_zone = self.simple_date_format_time_zone(receiver)?;
         let fast_time = self.date_fast_time(*date)?;
-        let output = native::format_simple_date(&pattern, fast_time)?;
+        let output = native::format_simple_date(&pattern, fast_time, time_zone)?;
         let reference = self.heap.allocate_string(output);
         caller.stack.push(Value::Reference(reference));
         self.collect_if_needed(caller);
         Ok(())
+    }
+
+    fn invoke_simple_date_format_set_time_zone(
+        &mut self,
+        receiver: ObjectRef,
+        arguments: &[Value],
+    ) -> JayResult<()> {
+        let [time_zone] = arguments else {
+            return Err(JayError::new(
+                "SimpleDateFormat.setTimeZone expected one TimeZone argument",
+            ));
+        };
+        let Value::Reference(time_zone) = time_zone else {
+            return Err(JayError::new(
+                "SimpleDateFormat.setTimeZone received null TimeZone",
+            ));
+        };
+
+        self.heap.put_instance_field(
+            receiver,
+            simple_date_format_time_zone_field(),
+            Value::Reference(*time_zone),
+        )
     }
 
     fn invoke_simple_date_format_constructor(
@@ -1219,6 +1296,54 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 other.type_name(&self.heap)?
             ))),
         }
+    }
+
+    fn simple_date_format_time_zone(&self, formatter: ObjectRef) -> JayResult<native::TimeZone> {
+        match self
+            .heap
+            .get_instance_field(formatter, &simple_date_format_time_zone_field())?
+        {
+            Some(Value::Reference(reference)) => self.time_zone(reference),
+            Some(Value::Null) | None => Ok(native::TimeZone::gmt()),
+            Some(other) => Err(JayError::new(format!(
+                "SimpleDateFormat timeZone found {}",
+                other.type_name(&self.heap)?
+            ))),
+        }
+    }
+
+    fn time_zone(&self, reference: ObjectRef) -> JayResult<native::TimeZone> {
+        let id = match self
+            .heap
+            .get_instance_field(reference, &time_zone_id_field())?
+        {
+            Some(Value::Reference(id)) => self.heap.string(id)?.to_string(),
+            Some(Value::Null) | None => {
+                return Err(JayError::new("TimeZone ID has not been initialized"));
+            }
+            Some(other) => {
+                return Err(JayError::new(format!(
+                    "TimeZone ID found {}",
+                    other.type_name(&self.heap)?
+                )));
+            }
+        };
+
+        let offset_millis = match self
+            .heap
+            .get_instance_field(reference, &time_zone_offset_field())?
+        {
+            Some(Value::Long(value)) => value,
+            None => return Err(JayError::new("TimeZone offset has not been initialized")),
+            Some(other) => {
+                return Err(JayError::new(format!(
+                    "TimeZone offset found {}",
+                    other.type_name(&self.heap)?
+                )));
+            }
+        };
+
+        Ok(native::TimeZone::resolved(id, offset_millis))
     }
 
     fn resolve_instance_method_class(
@@ -1626,6 +1751,22 @@ impl<'a, W: Write> Interpreter<'a, W> {
             ))),
         }
     }
+}
+
+fn simple_date_format_time_zone_field() -> FieldKey {
+    FieldKey::new(
+        "java/text/SimpleDateFormat",
+        "__jay_timeZone",
+        "Ljava/util/TimeZone;",
+    )
+}
+
+fn time_zone_id_field() -> FieldKey {
+    FieldKey::new("java/util/TimeZone", "__jay_id", "Ljava/lang/String;")
+}
+
+fn time_zone_offset_field() -> FieldKey {
+    FieldKey::new("java/util/TimeZone", "__jay_offsetMillis", "J")
 }
 
 fn checked_array_index(index: i32) -> JayResult<usize> {

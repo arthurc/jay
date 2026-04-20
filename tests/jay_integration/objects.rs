@@ -300,6 +300,43 @@ Current Time in AM/PM Format is : 12.00 AM\n"
 }
 
 #[test]
+fn formats_date_with_test2_date_time_zone_pattern() {
+    let root = temp_dir("date-format-test2-date-time-zone-pattern");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.TimeZone;
+
+public class Main {
+    public static void main(String[] args) {
+        Date date = new Date(0L);
+        SimpleDateFormat formatDate = new SimpleDateFormat("dd/MM/yyyy  HH:mm:ss z");
+        formatDate.setTimeZone(TimeZone.getTimeZone("IST"));
+        System.out.println(formatDate.format(date));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "01/01/1970  05:30:00 IST\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn prints_date_through_object_println() {
     let root = temp_dir("date-object-println");
     compile_java(

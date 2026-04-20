@@ -24,6 +24,42 @@ struct UtcDateTime {
     second: u8,
 }
 
+/// Fixed-offset timezone metadata for the small set of JDK date paths Jay shims.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TimeZone {
+    id: String,
+    offset_millis: i64,
+}
+
+impl TimeZone {
+    pub(super) fn gmt() -> Self {
+        Self::resolved("GMT", 0)
+    }
+
+    pub(super) fn from_id(id: &str) -> Self {
+        match id {
+            "IST" => Self::resolved("IST", 5 * MILLIS_PER_HOUR + 30 * MILLIS_PER_MINUTE),
+            "GMT" | "UTC" => Self::gmt(),
+            _ => Self::gmt(),
+        }
+    }
+
+    pub(super) fn resolved(id: impl Into<String>, offset_millis: i64) -> Self {
+        Self {
+            id: id.into(),
+            offset_millis,
+        }
+    }
+
+    pub(super) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(super) fn offset_millis(&self) -> i64 {
+        self.offset_millis
+    }
+}
+
 pub(super) fn date_to_string(epoch_millis: i64) -> String {
     let date_time = utc_date_time(epoch_millis);
     format!(
@@ -38,25 +74,40 @@ pub(super) fn date_to_string(epoch_millis: i64) -> String {
     )
 }
 
-pub(super) fn format_simple_date(pattern: &str, epoch_millis: i64) -> JayResult<String> {
-    if pattern != "hh.mm aa" {
-        return Err(JayError::new(format!(
+pub(super) fn format_simple_date(
+    pattern: &str,
+    epoch_millis: i64,
+    time_zone: TimeZone,
+) -> JayResult<String> {
+    let date_time = utc_date_time(epoch_millis + time_zone.offset_millis());
+    match pattern {
+        "hh.mm aa" => {
+            let mut hour = date_time.hour % 12;
+            if hour == 0 {
+                hour = 12;
+            }
+            let marker = if date_time.hour < 12 { "AM" } else { "PM" };
+
+            Ok(format!(
+                "{}.{} {marker}",
+                two_digits(hour),
+                two_digits(date_time.minute)
+            ))
+        }
+        "dd/MM/yyyy  HH:mm:ss z" => Ok(format!(
+            "{}/{}/{}  {}:{}:{} {}",
+            two_digits(date_time.day),
+            two_digits(date_time.month),
+            date_time.year,
+            two_digits(date_time.hour),
+            two_digits(date_time.minute),
+            two_digits(date_time.second),
+            time_zone.id()
+        )),
+        _ => Err(JayError::new(format!(
             "unsupported SimpleDateFormat pattern {pattern}"
-        )));
+        ))),
     }
-
-    let date_time = utc_date_time(epoch_millis);
-    let mut hour = date_time.hour % 12;
-    if hour == 0 {
-        hour = 12;
-    }
-    let marker = if date_time.hour < 12 { "AM" } else { "PM" };
-
-    Ok(format!(
-        "{}.{} {marker}",
-        two_digits(hour),
-        two_digits(date_time.minute)
-    ))
 }
 
 fn utc_date_time(epoch_millis: i64) -> UtcDateTime {
@@ -110,10 +161,35 @@ mod tests {
 
     #[test]
     fn formats_test2_time_pattern_in_utc() {
-        assert_eq!(format_simple_date("hh.mm aa", 0).unwrap(), "12.00 AM");
         assert_eq!(
-            format_simple_date("hh.mm aa", 13 * MILLIS_PER_HOUR + 5 * MILLIS_PER_MINUTE).unwrap(),
+            format_simple_date("hh.mm aa", 0, TimeZone::gmt()).unwrap(),
+            "12.00 AM"
+        );
+        assert_eq!(
+            format_simple_date(
+                "hh.mm aa",
+                13 * MILLIS_PER_HOUR + 5 * MILLIS_PER_MINUTE,
+                TimeZone::gmt()
+            )
+            .unwrap(),
             "01.05 PM"
+        );
+    }
+
+    #[test]
+    fn formats_test2_date_time_zone_pattern_in_ist() {
+        assert_eq!(
+            format_simple_date("dd/MM/yyyy  HH:mm:ss z", 0, TimeZone::from_id("IST")).unwrap(),
+            "01/01/1970  05:30:00 IST"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_gmt_for_unknown_time_zone_ids() {
+        assert_eq!(TimeZone::from_id("unknown").id(), "GMT");
+        assert_eq!(
+            format_simple_date("dd/MM/yyyy  HH:mm:ss z", 0, TimeZone::from_id("unknown")).unwrap(),
+            "01/01/1970  00:00:00 GMT"
         );
     }
 }
