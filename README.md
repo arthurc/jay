@@ -77,7 +77,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Private instance method calls invoked with `invokevirtual` resolve to the declaring class (no subclass override dispatch)
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
 - Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
-- Focused date shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, and `SimpleDateFormat("hh.mm aa").format(Date)` using GMT/UTC formatting
+- Focused date shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
 - Class files up to the parser's supported class file version range
 
