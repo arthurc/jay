@@ -7,6 +7,7 @@ mod value;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytecode::{
     branch_target, int_branch_taken, int_compare_branch_taken, read_i2, read_u1, read_u2,
@@ -110,6 +111,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 0x06 => frame.stack.push(Value::Int(3)),
                 0x07 => frame.stack.push(Value::Int(4)),
                 0x08 => frame.stack.push(Value::Int(5)),
+                0x09 => frame.stack.push(Value::Long(0)),
+                0x0a => frame.stack.push(Value::Long(1)),
                 0x10 => {
                     let value = read_u1(&code.bytes, &mut pc)? as i8 as i32;
                     frame.stack.push(Value::Int(value));
@@ -126,25 +129,39 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let index = read_u2(&code.bytes, &mut pc)?;
                     self.load_constant(class_file, frame, index)?;
                 }
+                0x14 => {
+                    let index = read_u2(&code.bytes, &mut pc)?;
+                    self.load_wide_constant(class_file, frame, index)?;
+                }
                 0x15 => {
                     let index = read_u1(&code.bytes, &mut pc)? as usize;
                     frame.load_int_local(index)?;
+                }
+                0x16 => {
+                    let index = read_u1(&code.bytes, &mut pc)? as usize;
+                    frame.load_long_local(index)?;
                 }
                 0x19 => {
                     let index = read_u1(&code.bytes, &mut pc)? as usize;
                     frame.load_reference_local(index)?;
                 }
                 0x1a..=0x1d => frame.load_int_local((opcode - 0x1a) as usize)?,
+                0x1e..=0x21 => frame.load_long_local((opcode - 0x1e) as usize)?,
                 0x2a..=0x2d => frame.load_reference_local((opcode - 0x2a) as usize)?,
                 0x36 => {
                     let index = read_u1(&code.bytes, &mut pc)? as usize;
                     frame.store_int_local(index)?;
+                }
+                0x37 => {
+                    let index = read_u1(&code.bytes, &mut pc)? as usize;
+                    frame.store_long_local(index)?;
                 }
                 0x3a => {
                     let index = read_u1(&code.bytes, &mut pc)? as usize;
                     frame.store_reference_local(index)?;
                 }
                 0x3b..=0x3e => frame.store_int_local((opcode - 0x3b) as usize)?,
+                0x3f..=0x42 => frame.store_long_local((opcode - 0x3f) as usize)?,
                 0x4b..=0x4e => frame.store_reference_local((opcode - 0x4b) as usize)?,
                 0x57 => {
                     let _ = frame.pop()?;
@@ -208,6 +225,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
                 }
                 0xac => return Ok(Some(Value::Int(frame.pop_int()?))),
+                0xad => return Ok(Some(Value::Long(frame.pop_long()?))),
                 0xb0 => return Ok(Some(frame.pop_reference()?)),
                 0xb1 => return Ok(None),
                 0xb2 => {
@@ -376,6 +394,22 @@ impl<'a, W: Write> Interpreter<'a, W> {
         )))
     }
 
+    fn load_wide_constant(
+        &mut self,
+        class_file: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        if let Ok(value) = class_file.constant_pool.long(index) {
+            frame.stack.push(Value::Long(value));
+            return Ok(());
+        }
+
+        Err(JayError::new(format!(
+            "unsupported ldc2_w constant at pool index #{index}"
+        )))
+    }
+
     fn get_static(
         &mut self,
         class_file: &ClassFile,
@@ -403,6 +437,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 }
                 (FieldType::Int, None) => {
                     frame.stack.push(Value::Int(0));
+                    Ok(())
+                }
+                (FieldType::Long, Some(Value::Long(value))) => {
+                    frame.stack.push(Value::Long(value));
+                    Ok(())
+                }
+                (FieldType::Long, None) => {
+                    frame.stack.push(Value::Long(0));
                     Ok(())
                 }
                 (FieldType::Reference, Some(value @ Value::Reference(_))) => {
@@ -465,6 +507,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 frame.stack.push(Value::Int(0));
                 Ok(())
             }
+            (FieldType::Long, Some(Value::Long(value))) => {
+                frame.stack.push(Value::Long(value));
+                Ok(())
+            }
+            (FieldType::Long, None) => {
+                frame.stack.push(Value::Long(0));
+                Ok(())
+            }
             (FieldType::Reference, Some(value @ Value::Reference(_))) => {
                 frame.stack.push(value);
                 Ok(())
@@ -519,6 +569,12 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 }
                 "(I)V" => {
                     let value = frame.pop_int()?;
+                    frame.pop_print_stream()?;
+                    writeln!(self.output, "{value}")?;
+                    Ok(())
+                }
+                "(J)V" => {
+                    let value = frame.pop_long()?;
                     frame.pop_print_stream()?;
                     writeln!(self.output, "{value}")?;
                     Ok(())
@@ -911,6 +967,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
             target_descriptor
         );
 
+        if target_class_name == "java/lang/System"
+            && target_method_name == "currentTimeMillis"
+            && target_descriptor == "()J"
+        {
+            caller.stack.push(Value::Long(current_time_millis()?));
+            return Ok(());
+        }
+
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
         let loaded_class_file;
         let target_class_file = if target_class_name == caller_class_file.this_class {
@@ -1208,6 +1272,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<bool> {
         match (actual, expected) {
             (descriptors::ValueType::Int, descriptors::ValueType::Int) => Ok(true),
+            (descriptors::ValueType::Long, descriptors::ValueType::Long) => Ok(true),
             (
                 descriptors::ValueType::Reference(actual_class),
                 descriptors::ValueType::Reference(expected_class),
@@ -1335,6 +1400,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
 
 fn checked_array_index(index: i32) -> JayResult<usize> {
     usize::try_from(index).map_err(|_| JayError::new(format!("negative array index {index}")))
+}
+
+fn current_time_millis() -> JayResult<i64> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| JayError::new(format!("system time is before Unix epoch: {error}")))?;
+    i64::try_from(duration.as_millis())
+        .map_err(|_| JayError::new("current time milliseconds exceed long range"))
 }
 
 fn apply_string_concat_recipe(recipe: &str, arguments: &[String]) -> JayResult<String> {

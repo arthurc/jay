@@ -8,6 +8,7 @@ use crate::JayResult;
 pub(super) enum Value {
     Uninitialized,
     Int(i32),
+    Long(i64),
     Reference(ObjectRef),
     PrintStream,
 }
@@ -16,6 +17,7 @@ impl Value {
     pub(super) fn value_type(&self, heap: &Heap) -> JayResult<Option<ValueType>> {
         match self {
             Value::Int(_) => Ok(Some(ValueType::Int)),
+            Value::Long(_) => Ok(Some(ValueType::Long)),
             Value::Reference(reference) => heap.value_type(*reference),
             Value::Uninitialized | Value::PrintStream => Ok(None),
         }
@@ -25,6 +27,7 @@ impl Value {
         match self {
             Value::Uninitialized => Ok("uninitialized".to_string()),
             Value::Int(_) => Ok("int".to_string()),
+            Value::Long(_) => Ok("long".to_string()),
             Value::Reference(reference) => heap.type_name(*reference),
             Value::PrintStream => Ok("PrintStream".to_string()),
         }
@@ -33,7 +36,7 @@ impl Value {
     pub(super) fn object_ref(&self) -> Option<ObjectRef> {
         match self {
             Value::Reference(reference) => Some(*reference),
-            Value::Uninitialized | Value::Int(_) | Value::PrintStream => None,
+            Value::Uninitialized | Value::Int(_) | Value::Long(_) | Value::PrintStream => None,
         }
     }
 }

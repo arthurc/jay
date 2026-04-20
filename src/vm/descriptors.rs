@@ -47,10 +47,11 @@ pub(super) enum ReturnType {
     Type(ValueType),
 }
 
-/// Single-slot values currently accepted in method descriptors.
+/// Runtime values currently accepted in method descriptors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ValueType {
     Int,
+    Long,
     /// A reference type name or descriptor, such as `java/lang/String` or `[Ljava/lang/Object;`.
     Reference(String),
 }
@@ -59,6 +60,7 @@ impl ValueType {
     pub(super) fn name(&self) -> String {
         match self {
             ValueType::Int => "int".to_string(),
+            ValueType::Long => "long".to_string(),
             ValueType::Reference(class_name) => class_name.replace('/', "."),
         }
     }
@@ -80,6 +82,7 @@ impl ReturnType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FieldType {
     Int,
+    Long,
     Reference,
 }
 
@@ -96,6 +99,10 @@ fn parse_complete_value_type(input: &str, descriptor: &str) -> JayResult<ValueTy
 pub(super) fn parse_field_descriptor(descriptor: &str) -> JayResult<FieldType> {
     if descriptor == "I" || descriptor == "Z" {
         return Ok(FieldType::Int);
+    }
+
+    if descriptor == "J" {
+        return Ok(FieldType::Long);
     }
 
     if descriptor.starts_with('L') && descriptor.ends_with(';') && descriptor.len() > 2 {
@@ -124,6 +131,10 @@ fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueTyp
 
     if let Some(remaining) = input.strip_prefix('Z') {
         return Ok((ValueType::Int, remaining));
+    }
+
+    if let Some(remaining) = input.strip_prefix('J') {
+        return Ok((ValueType::Long, remaining));
     }
 
     if let Some(array_type) = input.strip_prefix('[') {
@@ -186,6 +197,7 @@ mod tests {
     fn parses_supported_field_descriptors() {
         assert_eq!(parse_field_descriptor("I").unwrap(), FieldType::Int);
         assert_eq!(parse_field_descriptor("Z").unwrap(), FieldType::Int);
+        assert_eq!(parse_field_descriptor("J").unwrap(), FieldType::Long);
         assert_eq!(
             parse_field_descriptor("Ljava/lang/String;").unwrap(),
             FieldType::Reference
@@ -209,11 +221,11 @@ mod tests {
                 .contains("unsupported array field descriptor")
         );
 
-        let long_error = parse_field_descriptor("J").unwrap_err();
+        let long_error = parse_field_descriptor("F").unwrap_err();
         assert!(
             long_error
                 .to_string()
-                .contains("unsupported field descriptor J")
+                .contains("unsupported field descriptor F")
         );
     }
 
@@ -234,6 +246,14 @@ mod tests {
 
         assert_eq!(descriptor.parameter_types, vec![ValueType::Int]);
         assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Int));
+    }
+
+    #[test]
+    fn parses_long_method_descriptors() {
+        let descriptor = MethodDescriptor::parse("(J)J").unwrap();
+
+        assert_eq!(descriptor.parameter_types, vec![ValueType::Long]);
+        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Long));
     }
 
     #[test]

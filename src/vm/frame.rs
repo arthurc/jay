@@ -20,16 +20,24 @@ impl Frame {
 
     pub(super) fn with_arguments(max_locals: u16, arguments: Vec<Value>) -> JayResult<Self> {
         let mut frame = Self::new(max_locals);
-        if arguments.len() > frame.locals.len() {
+        let required_locals = arguments.iter().map(value_local_width).sum::<usize>();
+        if required_locals > frame.locals.len() {
             return Err(JayError::new(format!(
                 "method expects {} argument locals but max locals is {}",
-                arguments.len(),
+                required_locals,
                 frame.locals.len()
             )));
         }
 
-        for (index, value) in arguments.into_iter().enumerate() {
+        // Category-2 values occupy two local variable slots in JVM frames.
+        let mut index = 0usize;
+        for value in arguments {
+            let width = value_local_width(&value);
             frame.locals[index] = value;
+            if width == 2 {
+                frame.locals[index + 1] = Value::Uninitialized;
+            }
+            index += width;
         }
 
         Ok(frame)
@@ -45,6 +53,20 @@ impl Frame {
         let value = self.pop_int()?;
         let slot = self.local_slot_mut(index)?;
         *slot = Value::Int(value);
+        Ok(())
+    }
+
+    pub(super) fn load_long_local(&mut self, index: usize) -> JayResult<()> {
+        let value = self.local_long(index)?;
+        self.stack.push(Value::Long(value));
+        Ok(())
+    }
+
+    pub(super) fn store_long_local(&mut self, index: usize) -> JayResult<()> {
+        let value = self.pop_long()?;
+        self.ensure_category_two_local(index)?;
+        self.locals[index] = Value::Long(value);
+        self.locals[index + 1] = Value::Uninitialized;
         Ok(())
     }
 
@@ -110,6 +132,19 @@ impl Frame {
         }
     }
 
+    fn local_long(&self, index: usize) -> JayResult<i64> {
+        self.ensure_category_two_local(index)?;
+        match self.local_slot(index)? {
+            Value::Long(value) => Ok(*value),
+            Value::Uninitialized => Err(JayError::new(format!(
+                "local variable #{index} is uninitialized"
+            ))),
+            other => Err(JayError::new(format!(
+                "expected long in local variable #{index}, found {other:?}"
+            ))),
+        }
+    }
+
     fn local_reference(&self, index: usize) -> JayResult<&Value> {
         match self.local_slot(index)? {
             value @ Value::Reference(_) => Ok(value),
@@ -138,6 +173,17 @@ impl Frame {
                 "invalid local variable index #{index}; max locals {max_locals}"
             ))
         })
+    }
+
+    fn ensure_category_two_local(&self, index: usize) -> JayResult<()> {
+        if index + 1 < self.locals.len() {
+            return Ok(());
+        }
+
+        Err(JayError::new(format!(
+            "invalid category-2 local variable index #{index}; max locals {}",
+            self.locals.len()
+        )))
     }
 
     pub(super) fn pop_print_stream(&mut self) -> JayResult<()> {
@@ -170,6 +216,15 @@ impl Frame {
         }
     }
 
+    pub(super) fn pop_long(&mut self) -> JayResult<i64> {
+        match self.pop()? {
+            Value::Long(value) => Ok(value),
+            other => Err(JayError::new(format!(
+                "expected long on stack, found {other:?}"
+            ))),
+        }
+    }
+
     pub(super) fn pop_object_ref(&mut self) -> JayResult<ObjectRef> {
         match self.pop_reference()? {
             Value::Reference(reference) => Ok(reference),
@@ -191,6 +246,7 @@ impl Frame {
     pub(super) fn pop_value_of_type(&mut self, value_type: &ValueType) -> JayResult<Value> {
         match value_type {
             ValueType::Int => Ok(Value::Int(self.pop_int()?)),
+            ValueType::Long => Ok(Value::Long(self.pop_long()?)),
             ValueType::Reference(_) => self.pop_reference(),
         }
     }
@@ -198,6 +254,7 @@ impl Frame {
     pub(super) fn pop_field_value(&mut self, field_type: FieldType) -> JayResult<Value> {
         match field_type {
             FieldType::Int => Ok(Value::Int(self.pop_int()?)),
+            FieldType::Long => Ok(Value::Long(self.pop_long()?)),
             FieldType::Reference => self.pop_reference(),
         }
     }
@@ -213,6 +270,13 @@ impl Frame {
             .iter()
             .chain(self.stack.iter())
             .filter(|value| matches!(value, Value::Reference(_)))
+    }
+}
+
+fn value_local_width(value: &Value) -> usize {
+    match value {
+        Value::Long(_) => 2,
+        Value::Uninitialized | Value::Int(_) | Value::Reference(_) | Value::PrintStream => 1,
     }
 }
 
