@@ -234,6 +234,72 @@ public class Main {
 }
 
 #[test]
+fn reads_date_time_when_calendar_cache_is_null() {
+    let root = temp_dir("date-get-time-null-calendar-cache");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        java.util.Date date = new java.util.Date(123L);
+        System.out.println(date.getTime());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "123\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn formats_date_with_test2_time_pattern() {
+    let root = temp_dir("date-format-test2-time-pattern");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+public class Main {
+    public static void main(String[] args) {
+        Date date = new Date(0L);
+        System.out.println("Current Time is : " + date);
+        SimpleDateFormat formatTime = new SimpleDateFormat("hh.mm aa");
+        String time = formatTime.format(date);
+        System.out.println("Current Time in AM/PM Format is : " + time);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Current Time is : Thu Jan 01 00:00:00 GMT 1970\n\
+Current Time in AM/PM Format is : 12.00 AM\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_static_method_with_object_reference_parameter_and_return() {
     let root = temp_dir("static-object-reference-parameter-return");
     compile_java(

@@ -7,6 +7,9 @@ use crate::JayResult;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Value {
     Uninitialized,
+    /// JVM null reference value for unassigned reference fields, array slots,
+    /// and explicit `aconst_null` bytecode.
+    Null,
     Int(i32),
     Long(i64),
     Reference(ObjectRef),
@@ -19,13 +22,14 @@ impl Value {
             Value::Int(_) => Ok(Some(ValueType::Int)),
             Value::Long(_) => Ok(Some(ValueType::Long)),
             Value::Reference(reference) => heap.value_type(*reference),
-            Value::Uninitialized | Value::PrintStream => Ok(None),
+            Value::Uninitialized | Value::Null | Value::PrintStream => Ok(None),
         }
     }
 
     pub(super) fn type_name(&self, heap: &Heap) -> JayResult<String> {
         match self {
             Value::Uninitialized => Ok("uninitialized".to_string()),
+            Value::Null => Ok("null".to_string()),
             Value::Int(_) => Ok("int".to_string()),
             Value::Long(_) => Ok("long".to_string()),
             Value::Reference(reference) => heap.type_name(*reference),
@@ -36,7 +40,11 @@ impl Value {
     pub(super) fn object_ref(&self) -> Option<ObjectRef> {
         match self {
             Value::Reference(reference) => Some(*reference),
-            Value::Uninitialized | Value::Int(_) | Value::Long(_) | Value::PrintStream => None,
+            Value::Uninitialized
+            | Value::Null
+            | Value::Int(_)
+            | Value::Long(_)
+            | Value::PrintStream => None,
         }
     }
 }

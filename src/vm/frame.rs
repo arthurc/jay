@@ -114,6 +114,8 @@ impl Frame {
     pub(super) fn references_equal(&self, left: &Value, right: &Value) -> JayResult<bool> {
         match (left, right) {
             (Value::Reference(left), Value::Reference(right)) => Ok(left == right),
+            (Value::Null, Value::Null) => Ok(true),
+            (Value::Reference(_), Value::Null) | (Value::Null, Value::Reference(_)) => Ok(false),
             _ => Err(JayError::new(format!(
                 "expected references for comparison, found {left:?} and {right:?}"
             ))),
@@ -147,7 +149,7 @@ impl Frame {
 
     fn local_reference(&self, index: usize) -> JayResult<&Value> {
         match self.local_slot(index)? {
-            value @ Value::Reference(_) => Ok(value),
+            value @ (Value::Reference(_) | Value::Null) => Ok(value),
             Value::Uninitialized => Err(JayError::new(format!(
                 "local variable #{index} is uninitialized"
             ))),
@@ -228,6 +230,7 @@ impl Frame {
     pub(super) fn pop_object_ref(&mut self) -> JayResult<ObjectRef> {
         match self.pop_reference()? {
             Value::Reference(reference) => Ok(reference),
+            Value::Null => Err(JayError::new("null reference on stack")),
             other => Err(JayError::new(format!(
                 "expected reference on stack, found {other:?}"
             ))),
@@ -236,7 +239,7 @@ impl Frame {
 
     pub(super) fn pop_reference(&mut self) -> JayResult<Value> {
         match self.pop()? {
-            value @ Value::Reference(_) => Ok(value),
+            value @ (Value::Reference(_) | Value::Null) => Ok(value),
             other => Err(JayError::new(format!(
                 "expected reference on stack, found {other:?}"
             ))),
@@ -276,7 +279,11 @@ impl Frame {
 fn value_local_width(value: &Value) -> usize {
     match value {
         Value::Long(_) => 2,
-        Value::Uninitialized | Value::Int(_) | Value::Reference(_) | Value::PrintStream => 1,
+        Value::Uninitialized
+        | Value::Null
+        | Value::Int(_)
+        | Value::Reference(_)
+        | Value::PrintStream => 1,
     }
 }
 

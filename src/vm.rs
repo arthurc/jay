@@ -2,6 +2,7 @@ mod bytecode;
 mod descriptors;
 mod frame;
 mod heap;
+mod native;
 mod value;
 
 use std::collections::{HashMap, HashSet};
@@ -14,7 +15,7 @@ use bytecode::{
 };
 use descriptors::{FieldType, MethodDescriptor, ReturnType, parse_field_descriptor};
 use frame::Frame;
-use heap::{FieldKey, Heap};
+use heap::{FieldKey, Heap, ObjectRef};
 use value::Value;
 
 use crate::classfile::{ClassFile, Code, Method};
@@ -104,6 +105,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             let opcode = read_u1(&code.bytes, &mut pc)?;
             match opcode {
                 0x00 => {}
+                0x01 => frame.stack.push(Value::Null),
                 0x02 => frame.stack.push(Value::Int(-1)),
                 0x03 => frame.stack.push(Value::Int(0)),
                 0x04 => frame.stack.push(Value::Int(1)),
@@ -299,8 +301,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 }
                 0xc6 | 0xc7 => {
                     let offset = read_i2(&code.bytes, &mut pc)?;
-                    let _reference = frame.pop_reference()?;
-                    if opcode == 0xc7 {
+                    let reference = frame.pop_reference()?;
+                    let is_null = matches!(reference, Value::Null);
+                    if (opcode == 0xc6 && is_null) || (opcode == 0xc7 && !is_null) {
                         pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
                     }
                 }
@@ -448,16 +451,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     frame.stack.push(Value::Long(0));
                     Ok(())
                 }
-                (FieldType::Reference, Some(value @ Value::Reference(_))) => {
+                (FieldType::Reference, Some(value @ (Value::Reference(_) | Value::Null))) => {
                     frame.stack.push(value);
                     Ok(())
                 }
-                (FieldType::Reference, None) => Err(JayError::new(format!(
-                    "getstatic {}.{}:{} is unset; null references are unsupported",
-                    field.class_name.replace('/', "."),
-                    field.name,
-                    field.descriptor
-                ))),
+                (FieldType::Reference, None) => {
+                    frame.stack.push(Value::Null);
+                    Ok(())
+                }
                 (_, Some(other)) => Err(JayError::new(format!(
                     "getstatic {}.{}:{} found {}",
                     field.class_name.replace('/', "."),
@@ -516,16 +517,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 frame.stack.push(Value::Long(0));
                 Ok(())
             }
-            (FieldType::Reference, Some(value @ Value::Reference(_))) => {
+            (FieldType::Reference, Some(value @ (Value::Reference(_) | Value::Null))) => {
                 frame.stack.push(value);
                 Ok(())
             }
-            (FieldType::Reference, None) => Err(JayError::new(format!(
-                "getfield {}.{}:{} is unset; null references are unsupported",
-                field.class_name.replace('/', "."),
-                field.name,
-                field.descriptor
-            ))),
+            (FieldType::Reference, None) => {
+                frame.stack.push(Value::Null);
+                Ok(())
+            }
             (_, Some(other)) => Err(JayError::new(format!(
                 "getfield {}.{}:{} found {}",
                 field.class_name.replace('/', "."),
@@ -609,6 +608,18 @@ impl<'a, W: Write> Interpreter<'a, W> {
         )?;
         let receiver = frame.pop_object_ref()?;
         let receiver_class_name = self.heap.instance_class_name(receiver)?.to_string();
+        if target_method_name == "toString"
+            && target_descriptor == "()Ljava/lang/String;"
+            && receiver_class_name == "java/util/Date"
+        {
+            return self.invoke_date_to_string(frame, receiver);
+        }
+        if target_method_name == "format"
+            && target_descriptor == "(Ljava/util/Date;)Ljava/lang/String;"
+            && receiver_class_name == "java/text/SimpleDateFormat"
+        {
+            return self.invoke_simple_date_format(frame, receiver, &arguments);
+        }
         let (declaring_class_file, declaring_method) = self.resolve_instance_method(
             method.class_name,
             &target_method_name,
@@ -715,6 +726,12 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )?;
             let _receiver = caller.pop_reference()?;
             return Ok(());
+        }
+
+        if target_class_name == "java/text/SimpleDateFormat"
+            && target_descriptor == "(Ljava/lang/String;)V"
+        {
+            return self.invoke_simple_date_format_constructor(caller, &descriptor, &target_name);
         }
 
         let loaded_class_file;
@@ -1046,6 +1063,99 @@ impl<'a, W: Write> Interpreter<'a, W> {
         ClassFile::parse(&bytes)
     }
 
+    fn invoke_date_to_string(&mut self, caller: &mut Frame, receiver: ObjectRef) -> JayResult<()> {
+        let fast_time = self.date_fast_time(receiver)?;
+        let reference = self.heap.allocate_string(native::date_to_string(fast_time));
+        caller.stack.push(Value::Reference(reference));
+        self.collect_if_needed(caller);
+        Ok(())
+    }
+
+    fn invoke_simple_date_format(
+        &mut self,
+        caller: &mut Frame,
+        receiver: ObjectRef,
+        arguments: &[Value],
+    ) -> JayResult<()> {
+        let [date] = arguments else {
+            return Err(JayError::new(
+                "SimpleDateFormat.format expected one Date argument",
+            ));
+        };
+        let Value::Reference(date) = date else {
+            return Err(JayError::new("SimpleDateFormat.format received null Date"));
+        };
+
+        let pattern = self.simple_date_format_pattern(receiver)?;
+        let fast_time = self.date_fast_time(*date)?;
+        let output = native::format_simple_date(&pattern, fast_time)?;
+        let reference = self.heap.allocate_string(output);
+        caller.stack.push(Value::Reference(reference));
+        self.collect_if_needed(caller);
+        Ok(())
+    }
+
+    fn invoke_simple_date_format_constructor(
+        &mut self,
+        caller: &mut Frame,
+        descriptor: &MethodDescriptor,
+        target_name: &str,
+    ) -> JayResult<()> {
+        let arguments = self.pop_constructor_arguments(
+            caller,
+            descriptor,
+            &format!("invokespecial constructor target {target_name}"),
+        )?;
+        let [pattern] = arguments.as_slice() else {
+            return Err(JayError::new(
+                "SimpleDateFormat constructor expected one pattern argument",
+            ));
+        };
+        let Value::Reference(pattern) = pattern else {
+            return Err(JayError::new(
+                "SimpleDateFormat constructor received null pattern",
+            ));
+        };
+        let receiver = caller.pop_object_ref()?;
+        let field = FieldKey::new(
+            "java/text/SimpleDateFormat",
+            "pattern",
+            "Ljava/lang/String;",
+        );
+        self.heap
+            .put_instance_field(receiver, field, Value::Reference(*pattern))
+    }
+
+    fn date_fast_time(&self, date: ObjectRef) -> JayResult<i64> {
+        let field = FieldKey::new("java/util/Date", "fastTime", "J");
+        match self.heap.get_instance_field(date, &field)? {
+            Some(Value::Long(value)) => Ok(value),
+            None => Ok(0),
+            Some(other) => Err(JayError::new(format!(
+                "java.util.Date.fastTime found {}",
+                other.type_name(&self.heap)?
+            ))),
+        }
+    }
+
+    fn simple_date_format_pattern(&self, formatter: ObjectRef) -> JayResult<String> {
+        let field = FieldKey::new(
+            "java/text/SimpleDateFormat",
+            "pattern",
+            "Ljava/lang/String;",
+        );
+        match self.heap.get_instance_field(formatter, &field)? {
+            Some(Value::Reference(reference)) => Ok(self.heap.string(reference)?.to_string()),
+            Some(Value::Null) | None => Err(JayError::new(
+                "SimpleDateFormat pattern has not been initialized",
+            )),
+            Some(other) => Err(JayError::new(format!(
+                "SimpleDateFormat pattern found {}",
+                other.type_name(&self.heap)?
+            ))),
+        }
+    }
+
     fn resolve_instance_method_class(
         &self,
         receiver_class_name: &str,
@@ -1216,6 +1326,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
             (ReturnType::Void, Some(_)) => Err(JayError::new(format!(
                 "{target_description} returned a value from void method"
             ))),
+            (ReturnType::Type(descriptors::ValueType::Reference(_)), Some(Value::Null)) => {
+                caller.stack.push(Value::Null);
+                Ok(())
+            }
             (ReturnType::Type(return_type), Some(value)) => {
                 if let Some(actual_type) = value.value_type(&self.heap)?
                     && self.is_assignable_type(&actual_type, &return_type)?
@@ -1239,6 +1353,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
 
     fn string_concat_argument(&self, value: Value) -> JayResult<String> {
         match value {
+            Value::Null => Ok("null".to_string()),
             Value::Int(value) => Ok(value.to_string()),
             Value::Reference(reference) => Ok(self.heap.string(reference)?.to_string()),
             other => Err(JayError::new(format!(
@@ -1271,6 +1386,12 @@ impl<'a, W: Write> Interpreter<'a, W> {
         target_description: &str,
         action: &str,
     ) -> JayResult<()> {
+        if matches!(value, Value::Null)
+            && matches!(expected_type, descriptors::ValueType::Reference(_))
+        {
+            return Ok(());
+        }
+
         if let Some(actual_type) = value.value_type(&self.heap)?
             && self.is_assignable_type(&actual_type, expected_type)?
         {
