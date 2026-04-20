@@ -300,6 +300,92 @@ Current Time in AM/PM Format is : 12.00 AM\n"
 }
 
 #[test]
+fn prints_date_through_object_println() {
+    let root = temp_dir("date-object-println");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+import java.util.Date;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println((Object) new Date(0L));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Thu Jan 01 00:00:00 GMT 1970\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn prints_null_through_object_println() {
+    let root = temp_dir("null-object-println");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        System.out.println((Object) null);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "null\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn prints_string_through_object_println() {
+    let root = temp_dir("string-object-println");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        System.out.println((Object) "hello");
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_static_method_with_object_reference_parameter_and_return() {
     let root = temp_dir("static-object-reference-parameter-return");
     compile_java(

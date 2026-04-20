@@ -58,7 +58,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Directory classpaths for application classes
 - JDK boot class lookup through `JAVA_HOME/lib/modules`
 - `public static void main(String[] args)` and `public static void main()`
-- `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, and `System.out.println(boolean)`
+- `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, and focused `System.out.println(Object)` support for `null`, `String`, and `Date`
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Limited heap-allocated `Object[]` arrays with allocation, length, load, and store bytecodes
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment

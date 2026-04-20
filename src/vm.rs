@@ -567,6 +567,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     writeln!(self.output, "{value}")?;
                     Ok(())
                 }
+                "(Ljava/lang/Object;)V" => {
+                    let value = frame.pop_reference()?;
+                    frame.pop_print_stream()?;
+                    let text = self.println_object_text(value)?;
+                    writeln!(self.output, "{text}")?;
+                    Ok(())
+                }
                 "(I)V" => {
                     let value = frame.pop_int()?;
                     frame.pop_print_stream()?;
@@ -1358,6 +1365,31 @@ impl<'a, W: Write> Interpreter<'a, W> {
             Value::Reference(reference) => Ok(self.heap.string(reference)?.to_string()),
             other => Err(JayError::new(format!(
                 "unsupported string concat argument {}",
+                other.type_name(&self.heap)?
+            ))),
+        }
+    }
+
+    /// Formats the focused subset of values supported by PrintStream.println(Object).
+    fn println_object_text(&self, value: Value) -> JayResult<String> {
+        match value {
+            Value::Null => Ok("null".to_string()),
+            Value::Reference(reference) => match self.heap.value_type(reference)? {
+                Some(descriptors::ValueType::Reference(class_name)) => match class_name.as_str() {
+                    "java/lang/String" => Ok(self.heap.string(reference)?.to_string()),
+                    "java/util/Date" => Ok(native::date_to_string(self.date_fast_time(reference)?)),
+                    _ => Err(JayError::new(format!(
+                        "unsupported PrintStream.println(Object) value {}",
+                        self.heap.type_name(reference)?
+                    ))),
+                },
+                _ => Err(JayError::new(format!(
+                    "unsupported PrintStream.println(Object) value {}",
+                    self.heap.type_name(reference)?
+                ))),
+            },
+            other => Err(JayError::new(format!(
+                "unsupported PrintStream.println(Object) value {}",
                 other.type_name(&self.heap)?
             ))),
         }
