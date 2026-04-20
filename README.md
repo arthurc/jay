@@ -64,7 +64,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
 - Integer comparisons, branches, and simple loops
 - Reference comparison branches for non-null references
-- Static fields and class initialization through static class initializers, including `putstatic`-triggered initialization and re-entrant initialization guards
+- Static fields and class initialization through static class initializers, including `putstatic`-triggered initialization, re-entrant initialization guards, and preserving `putstatic` reference values across initializer-triggered GC
 - Static method calls with `int` and object-reference parameters and `int`, object-reference, or `void` return values
 - Same-class and cross-class static method calls
 - Simple object allocation and constructor calls

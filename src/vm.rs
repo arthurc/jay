@@ -434,10 +434,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<()> {
         let field = class_file.constant_pool.field_ref(index)?;
         let field_type = parse_field_descriptor(field.descriptor)?;
-        let value = frame.pop_field_value(field_type)?;
         let declaring_class_name =
             self.resolve_field_class(field.class_name, field.name, field.descriptor)?;
         self.initialize_class(&declaring_class_name, frame)?;
+        let value = frame.pop_field_value(field_type)?;
         let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
         self.static_fields.insert(field_key, value);
         Ok(())
