@@ -84,6 +84,19 @@ pub(crate) fn make_method_non_static(root: &Path, relative_class_path: &str, met
     std::fs::write(class_path, bytes).unwrap();
 }
 
+pub(crate) fn replace_utf8_constant(root: &Path, relative_class_path: &str, from: &str, to: &str) {
+    assert_eq!(
+        from.len(),
+        to.len(),
+        "replacement must preserve UTF-8 length"
+    );
+    let class_path = root.join(relative_class_path);
+    let mut bytes = std::fs::read(&class_path).unwrap();
+    let mut cursor = ClassEditor::new(&mut bytes);
+    cursor.replace_utf8_constant(from, to);
+    std::fs::write(class_path, bytes).unwrap();
+}
+
 struct ClassEditor<'a> {
     bytes: &'a mut [u8],
     offset: usize,
@@ -130,6 +143,46 @@ impl<'a> ClassEditor<'a> {
         }
 
         panic!("method {method_name} not found");
+    }
+
+    fn replace_utf8_constant(&mut self, from: &str, to: &str) {
+        assert_eq!(self.read_u4(), 0xCAFEBABE);
+        self.skip(4);
+
+        let count = self.read_u2() as usize;
+        let mut index = 1;
+        let mut replacements = 0usize;
+        while index < count {
+            let tag = self.read_u1();
+            match tag {
+                1 => {
+                    let length = self.read_u2() as usize;
+                    let value = std::str::from_utf8(&self.bytes[self.offset..self.offset + length])
+                        .unwrap();
+                    if value == from {
+                        self.bytes[self.offset..self.offset + length]
+                            .copy_from_slice(to.as_bytes());
+                        replacements += 1;
+                    }
+                    self.skip(length);
+                }
+                3 | 4 => self.skip(4),
+                5 | 6 => {
+                    self.skip(8);
+                    index += 1;
+                }
+                7 | 8 | 16 | 19 | 20 => self.skip(2),
+                9 | 10 | 11 | 12 | 17 | 18 => self.skip(4),
+                15 => self.skip(3),
+                other => panic!("unsupported test constant pool tag {other}"),
+            }
+            index += 1;
+        }
+
+        assert!(
+            replacements > 0,
+            "UTF-8 constant {from} not found in class file"
+        );
     }
 
     fn read_constant_pool(&mut self) {

@@ -62,12 +62,13 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
 - Integer comparisons, branches, and simple loops
-- Static method calls with `int` and `String` parameters and `int`, `String`, or `void` return values
+- Static method calls with `int` and object-reference parameters and `int`, object-reference, or `void` return values
 - Same-class and cross-class static method calls
 - Simple object allocation and constructor calls
+- Constructor calls with `int` and object-reference parameters
 - Instance field writes for `int` and object references
 - Instance field reads for assigned `int` and object references
-- Same-class and cross-class instance method calls with supported parameter and return types
+- Same-class and cross-class instance method calls with `int` and object-reference parameters and return values
 - Private instance method calls invoked with `invokevirtual` resolve to the declaring class (no subclass override dispatch)
 - Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
 - Constructor expression statements (for example `new Empty();`)
