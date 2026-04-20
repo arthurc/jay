@@ -1097,6 +1097,12 @@ impl<'a, W: Write> Interpreter<'a, W> {
             let descriptor = MethodDescriptor::parse(&target_descriptor)?;
             return self.invoke_time_zone_get_time_zone(caller, &descriptor, &target_name);
         }
+        if target_class_name == "java/time/LocalDateTime"
+            && target_method_name == "now"
+            && target_descriptor == "()Ljava/time/LocalDateTime;"
+        {
+            return self.invoke_local_date_time_now(caller);
+        }
 
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
         let loaded_class_file;
@@ -1217,6 +1223,19 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Ok(())
     }
 
+    fn invoke_local_date_time_now(&mut self, caller: &mut Frame) -> JayResult<()> {
+        let epoch_millis = current_time_millis()?;
+        let reference = self.heap.allocate_instance("java/time/LocalDateTime");
+        self.heap.put_instance_field(
+            reference,
+            local_date_time_epoch_millis_field(),
+            Value::Long(epoch_millis),
+        )?;
+        caller.stack.push(Value::Reference(reference));
+        self.collect_if_needed(caller);
+        Ok(())
+    }
+
     fn invoke_date_to_string(&mut self, caller: &mut Frame, receiver: ObjectRef) -> JayResult<()> {
         let fast_time = self.date_fast_time(receiver)?;
         let reference = self.heap.allocate_string(native::date_to_string(fast_time));
@@ -1311,6 +1330,22 @@ impl<'a, W: Write> Interpreter<'a, W> {
             None => Ok(0),
             Some(other) => Err(JayError::new(format!(
                 "java.util.Date.fastTime found {}",
+                other.type_name(&self.heap)?
+            ))),
+        }
+    }
+
+    fn local_date_time_epoch_millis(&self, local_date_time: ObjectRef) -> JayResult<i64> {
+        match self
+            .heap
+            .get_instance_field(local_date_time, &local_date_time_epoch_millis_field())?
+        {
+            Some(Value::Long(value)) => Ok(value),
+            None => Err(JayError::new(
+                "LocalDateTime epoch millis has not been initialized",
+            )),
+            Some(other) => Err(JayError::new(format!(
+                "LocalDateTime epoch millis found {}",
                 other.type_name(&self.heap)?
             ))),
         }
@@ -1597,6 +1632,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 Some(descriptors::ValueType::Reference(class_name)) => match class_name.as_str() {
                     "java/lang/String" => Ok(self.heap.string(reference)?.to_string()),
                     "java/util/Date" => Ok(native::date_to_string(self.date_fast_time(reference)?)),
+                    "java/time/LocalDateTime" => Ok(native::local_date_time_to_string(
+                        self.local_date_time_epoch_millis(reference)?,
+                    )),
                     _ => Err(JayError::new(format!(
                         "unsupported PrintStream.println(Object) value {}",
                         self.heap.type_name(reference)?
@@ -1815,6 +1853,10 @@ fn time_zone_id_field() -> FieldKey {
 
 fn time_zone_offset_field() -> FieldKey {
     FieldKey::new("java/util/TimeZone", "__jay_offsetMillis", "J")
+}
+
+fn local_date_time_epoch_millis_field() -> FieldKey {
+    FieldKey::new("java/time/LocalDateTime", "__jay_epochMillis", "J")
 }
 
 fn checked_array_index(index: i32) -> JayResult<usize> {
