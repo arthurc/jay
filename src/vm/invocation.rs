@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use super::descriptors::{MethodDescriptor, ReturnType};
+use super::descriptors::{MethodDescriptor, ReturnType, ValueType};
 use super::frame::Frame;
 use super::interpreter::Interpreter;
 use super::native_runtime::current_time_millis;
@@ -91,13 +91,42 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 target_descriptor
             ),
         )?;
-        let receiver = frame.pop_object_ref()?;
-        let receiver_class_name = self.heap.instance_class_name(receiver)?.to_string();
+        let receiver = frame.pop_reference()?;
+        let receiver = match receiver {
+            Value::Reference(reference) => reference,
+            Value::Null => return Err(JayError::new("null reference on stack")),
+            other => {
+                return Err(JayError::new(format!(
+                    "expected reference on stack, found {other:?}"
+                )));
+            }
+        };
+        let receiver_class_name = match self.heap.value_type(receiver)? {
+            Some(ValueType::Reference(class_name)) => class_name,
+            Some(other) => {
+                return Err(JayError::new(format!(
+                    "invokevirtual receiver had unexpected type {}",
+                    other.name()
+                )));
+            }
+            None => return Err(JayError::new("invokevirtual receiver type is unavailable")),
+        };
         if target_method_name == "toString"
             && target_descriptor == "()Ljava/lang/String;"
             && receiver_class_name == "java/util/Date"
         {
             return self.invoke_date_to_string(frame, receiver);
+        }
+        if target_method_name == "hashCode"
+            && target_descriptor == "()I"
+            && receiver_class_name == "java/lang/String"
+        {
+            let value = self.heap.string(receiver)?;
+            let hash = value.encode_utf16().fold(0i32, |hash, unit| {
+                hash.wrapping_mul(31).wrapping_add(unit as i32)
+            });
+            frame.stack.push(Value::Int(hash));
+            return Ok(());
         }
         if target_method_name == "format"
             && target_descriptor == "(Ljava/util/Date;)Ljava/lang/String;"
@@ -489,6 +518,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             let descriptor = MethodDescriptor::parse(&target_descriptor)?;
             return self.invoke_time_zone_get_time_zone(caller, &descriptor, &target_name);
+        }
+        if target_class_name == "java/lang/Integer"
+            && target_method_name == "valueOf"
+            && target_descriptor == "(I)Ljava/lang/Integer;"
+        {
+            let descriptor = MethodDescriptor::parse(&target_descriptor)?;
+            return self.invoke_integer_value_of(caller, &descriptor, &target_name);
+        }
+        if target_class_name == "java/lang/String"
+            && target_method_name == "valueOf"
+            && target_descriptor == "(Ljava/lang/Object;)Ljava/lang/String;"
+        {
+            let descriptor = MethodDescriptor::parse(&target_descriptor)?;
+            return self.invoke_string_value_of_object(caller, &descriptor, &target_name);
         }
         if target_class_name == "java/time/LocalDateTime"
             && target_method_name == "now"

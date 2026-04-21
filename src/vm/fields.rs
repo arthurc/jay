@@ -31,19 +31,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
         index: u16,
     ) -> JayResult<()> {
         let class_name = class_file.constant_pool.class_name(index)?;
-        if class_name != "java/lang/Object" {
-            return Err(JayError::new(format!(
-                "unsupported anewarray component {}",
-                class_name.replace('/', ".")
-            )));
-        }
-
         let length = frame.pop_int()?;
         if length < 0 {
             return Err(JayError::new(format!("negative array length {length}")));
         }
 
-        let reference = self.heap.allocate_object_array(length as usize);
+        let descriptor = format!("[L{class_name};");
+        let reference = self.heap.allocate_reference_array(descriptor, length as usize);
         frame.stack.push(Value::Reference(reference));
         self.collect_if_needed(frame);
         Ok(())
@@ -65,6 +59,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
 
         if let Ok(value) = constant_pool.integer(index) {
             frame.stack.push(Value::Int(value));
+            return Ok(());
+        }
+
+        if let Ok(value) = constant_pool.float(index) {
+            frame.stack.push(Value::Float(value));
             return Ok(());
         }
 
@@ -123,6 +122,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 }
                 (FieldType::Int, None) => {
                     frame.stack.push(Value::Int(0));
+                    Ok(())
+                }
+                (FieldType::Float, Some(Value::Float(value))) => {
+                    frame.stack.push(Value::Float(value));
+                    Ok(())
+                }
+                (FieldType::Float, None) => {
+                    frame.stack.push(Value::Float(0.0));
                     Ok(())
                 }
                 (FieldType::Long, Some(Value::Long(value))) => {
@@ -189,6 +196,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
             }
             (FieldType::Int, None) => {
                 frame.stack.push(Value::Int(0));
+                Ok(())
+            }
+            (FieldType::Float, Some(Value::Float(value))) => {
+                frame.stack.push(Value::Float(value));
+                Ok(())
+            }
+            (FieldType::Float, None) => {
+                frame.stack.push(Value::Float(0.0));
                 Ok(())
             }
             (FieldType::Long, Some(Value::Long(value))) => {

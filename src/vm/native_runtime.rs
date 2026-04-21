@@ -12,6 +12,105 @@ use super::value::Value;
 use crate::{JayError, JayResult};
 
 impl<'a, W: Write> Interpreter<'a, W> {
+    pub(super) fn invoke_integer_value_of(
+        &mut self,
+        caller: &mut Frame,
+        descriptor: &MethodDescriptor,
+        target_name: &str,
+    ) -> JayResult<()> {
+        let arguments = self.pop_method_arguments(
+            caller,
+            descriptor,
+            &format!("invokestatic target {target_name}"),
+        )?;
+        let [Value::Int(value)] = arguments.as_slice() else {
+            return Err(JayError::new("Integer.valueOf expected one int argument"));
+        };
+
+        let reference = self.heap.allocate_instance("java/lang/Integer");
+        self.heap.put_instance_field(
+            reference,
+            integer_value_field(),
+            Value::Int(*value),
+        )?;
+        caller.stack.push(Value::Reference(reference));
+        self.collect_if_needed(caller);
+        Ok(())
+    }
+
+    pub(super) fn invoke_string_value_of_object(
+        &mut self,
+        caller: &mut Frame,
+        descriptor: &MethodDescriptor,
+        target_name: &str,
+    ) -> JayResult<()> {
+        let arguments = self.pop_method_arguments(
+            caller,
+            descriptor,
+            &format!("invokestatic target {target_name}"),
+        )?;
+        let [value] = arguments.as_slice() else {
+            return Err(JayError::new(
+                "String.valueOf(Object) expected one argument",
+            ));
+        };
+
+        match value {
+            Value::Null => {
+                let reference = self.heap.allocate_string("null");
+                caller.stack.push(Value::Reference(reference));
+                self.collect_if_needed(caller);
+            }
+            Value::Reference(reference) => {
+                let class_name = self.heap.instance_class_name(*reference).ok();
+                match class_name.as_deref() {
+                    Some("java/lang/Integer") => {
+                        let text = self.boxed_integer_value(*reference)?.to_string();
+                        let reference = self.heap.allocate_string(text);
+                        caller.stack.push(Value::Reference(reference));
+                        self.collect_if_needed(caller);
+                    }
+                    _ if matches!(
+                        self.heap.value_type(*reference)?,
+                        Some(super::descriptors::ValueType::Reference(ref name))
+                            if name == "java/lang/String"
+                    ) =>
+                    {
+                        caller.stack.push(Value::Reference(*reference));
+                    }
+                    _ => {
+                        let text = self.println_object_text(value.clone())?;
+                        let reference = self.heap.allocate_string(text);
+                        caller.stack.push(Value::Reference(reference));
+                        self.collect_if_needed(caller);
+                    }
+                }
+            }
+            other => {
+                return Err(JayError::new(format!(
+                    "String.valueOf(Object) received {}",
+                    other.type_name(&self.heap)?
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn boxed_integer_value(&self, reference: ObjectRef) -> JayResult<i32> {
+        match self
+            .heap
+            .get_instance_field(reference, &integer_value_field())?
+        {
+            Some(Value::Int(value)) => Ok(value),
+            None => Err(JayError::new("Integer value has not been initialized")),
+            Some(other) => Err(JayError::new(format!(
+                "Integer value found {}",
+                other.type_name(&self.heap)?
+            ))),
+        }
+    }
+
     pub(super) fn invoke_time_zone_get_time_zone(
         &mut self,
         caller: &mut Frame,
@@ -275,6 +374,10 @@ fn time_zone_offset_field() -> FieldKey {
 
 fn local_date_time_epoch_millis_field() -> FieldKey {
     FieldKey::new("java/time/LocalDateTime", "__jay_epochMillis", "J")
+}
+
+fn integer_value_field() -> FieldKey {
+    FieldKey::new("java/lang/Integer", "value", "I")
 }
 
 pub(super) fn current_time_millis() -> JayResult<i64> {

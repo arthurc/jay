@@ -173,6 +173,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<bool> {
         match (actual, expected) {
             (descriptors::ValueType::Int, descriptors::ValueType::Int) => Ok(true),
+            (descriptors::ValueType::Float, descriptors::ValueType::Float) => Ok(true),
             (descriptors::ValueType::Long, descriptors::ValueType::Long) => Ok(true),
             (
                 descriptors::ValueType::Reference(actual_class),

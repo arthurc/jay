@@ -33,6 +33,7 @@ enum ObjectKind {
         fields: HashMap<FieldKey, Value>,
     },
     ObjectArray {
+        descriptor: String,
         elements: Vec<Value>,
     },
 }
@@ -80,8 +81,13 @@ impl Heap {
         })
     }
 
-    pub(super) fn allocate_object_array(&mut self, length: usize) -> ObjectRef {
+    pub(super) fn allocate_reference_array(
+        &mut self,
+        descriptor: impl Into<String>,
+        length: usize,
+    ) -> ObjectRef {
         self.allocate(ObjectKind::ObjectArray {
+            descriptor: descriptor.into(),
             elements: vec![Value::Null; length],
         })
     }
@@ -109,9 +115,10 @@ impl Heap {
                 "expected String reference, found {}",
                 class_name.replace('/', ".")
             ))),
-            ObjectKind::ObjectArray { .. } => Err(JayError::new(
-                "expected String reference, found java.lang.Object[]",
-            )),
+            ObjectKind::ObjectArray { ref descriptor, .. } => Err(JayError::new(format!(
+                "expected String reference, found {}",
+                reference_array_name(descriptor)
+            ))),
         }
     }
 
@@ -121,9 +128,9 @@ impl Heap {
             ObjectKind::Instance { ref class_name, .. } => {
                 Ok(Some(ValueType::Reference(class_name.clone())))
             }
-            ObjectKind::ObjectArray { .. } => Ok(Some(ValueType::Reference(
-                "[Ljava/lang/Object;".to_string(),
-            ))),
+            ObjectKind::ObjectArray { ref descriptor, .. } => {
+                Ok(Some(ValueType::Reference(descriptor.clone())))
+            }
         }
     }
 
@@ -131,7 +138,7 @@ impl Heap {
         match self.object(reference)?.kind {
             ObjectKind::String(_) => Ok("String".to_string()),
             ObjectKind::Instance { ref class_name, .. } => Ok(class_name.replace('/', ".")),
-            ObjectKind::ObjectArray { .. } => Ok("java.lang.Object[]".to_string()),
+            ObjectKind::ObjectArray { ref descriptor, .. } => Ok(reference_array_name(descriptor)),
         }
     }
 
@@ -141,9 +148,10 @@ impl Heap {
             ObjectKind::String(_) => {
                 Err(JayError::new("expected instance reference, found String"))
             }
-            ObjectKind::ObjectArray { .. } => Err(JayError::new(
-                "expected instance reference, found java.lang.Object[]",
-            )),
+            ObjectKind::ObjectArray { ref descriptor, .. } => Err(JayError::new(format!(
+                "expected instance reference, found {}",
+                reference_array_name(descriptor)
+            ))),
         }
     }
 
@@ -161,9 +169,10 @@ impl Heap {
             ObjectKind::String(_) => Err(JayError::new(
                 "expected instance reference for putfield, found String",
             )),
-            ObjectKind::ObjectArray { .. } => Err(JayError::new(
-                "expected instance reference for putfield, found java.lang.Object[]",
-            )),
+            ObjectKind::ObjectArray { ref descriptor, .. } => Err(JayError::new(format!(
+                "expected instance reference for putfield, found {}",
+                reference_array_name(descriptor)
+            ))),
         }
     }
 
@@ -177,15 +186,16 @@ impl Heap {
             ObjectKind::String(_) => Err(JayError::new(
                 "expected instance reference for getfield, found String",
             )),
-            ObjectKind::ObjectArray { .. } => Err(JayError::new(
-                "expected instance reference for getfield, found java.lang.Object[]",
-            )),
+            ObjectKind::ObjectArray { ref descriptor, .. } => Err(JayError::new(format!(
+                "expected instance reference for getfield, found {}",
+                reference_array_name(descriptor)
+            ))),
         }
     }
 
     pub(super) fn array_length(&self, reference: ObjectRef) -> JayResult<usize> {
         match self.object(reference)?.kind {
-            ObjectKind::ObjectArray { ref elements } => Ok(elements.len()),
+            ObjectKind::ObjectArray { ref elements, .. } => Ok(elements.len()),
             _ => Err(JayError::new(format!(
                 "expected object array reference, found {}",
                 self.type_name(reference)?
@@ -199,7 +209,7 @@ impl Heap {
         index: usize,
     ) -> JayResult<Value> {
         match self.object(reference)?.kind {
-            ObjectKind::ObjectArray { ref elements } => {
+            ObjectKind::ObjectArray { ref elements, .. } => {
                 let Some(value) = elements.get(index) else {
                     return Err(JayError::new(format!(
                         "array index {index} out of bounds for length {}",
@@ -229,7 +239,9 @@ impl Heap {
         }
 
         match self.object_mut(reference)?.kind {
-            ObjectKind::ObjectArray { ref mut elements } => {
+            ObjectKind::ObjectArray {
+                ref mut elements, ..
+            } => {
                 let length = elements.len();
                 let Some(slot) = elements.get_mut(index) else {
                     return Err(JayError::new(format!(
@@ -294,7 +306,7 @@ impl Heap {
                 ObjectKind::Instance { ref fields, .. } => {
                     fields.values().filter_map(Value::object_ref).collect()
                 }
-                ObjectKind::ObjectArray { ref elements } => {
+                ObjectKind::ObjectArray { ref elements, .. } => {
                     elements.iter().filter_map(Value::object_ref).collect()
                 }
             }
@@ -319,6 +331,14 @@ impl Heap {
             }
         }
     }
+}
+
+fn reference_array_name(descriptor: &str) -> String {
+    descriptor
+        .strip_prefix("[L")
+        .and_then(|descriptor| descriptor.strip_suffix(';'))
+        .map(|class_name| format!("{}[]", class_name.replace('/', ".")))
+        .unwrap_or_else(|| descriptor.replace('/', "."))
 }
 
 #[cfg(test)]
@@ -379,7 +399,7 @@ mod tests {
     #[test]
     fn heap_object_arrays_store_length_and_references() {
         let mut heap = Heap::new();
-        let array = heap.allocate_object_array(2);
+        let array = heap.allocate_reference_array("[Ljava/lang/Object;", 2);
         let first = heap.allocate_string("first");
         let second = heap.allocate_string("second");
 
@@ -402,9 +422,21 @@ mod tests {
     #[test]
     fn heap_loads_unset_array_reference_slots_as_nulls() {
         let mut heap = Heap::new();
-        let array = heap.allocate_object_array(1);
+        let array = heap.allocate_reference_array("[Ljava/lang/Object;", 1);
 
         assert_eq!(heap.load_array_reference(array, 0).unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn heap_reports_typed_reference_arrays() {
+        let mut heap = Heap::new();
+        let array = heap.allocate_reference_array("[Ljava/util/HashMap$Node;", 1);
+
+        assert_eq!(
+            heap.value_type(array).unwrap(),
+            Some(ValueType::Reference("[Ljava/util/HashMap$Node;".to_string()))
+        );
+        assert_eq!(heap.type_name(array).unwrap(), "java.util.HashMap$Node[]");
     }
 
     #[test]
