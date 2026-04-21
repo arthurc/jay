@@ -70,6 +70,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Static fields and class initialization through static class initializers, including `putstatic`-triggered initialization, re-entrant initialization guards, preserving `putstatic` reference values across initializer-triggered GC, and resolving interface fields inherited from superinterfaces
 - Static method calls with `int` and object-reference parameters and `int`, object-reference, or `void` return values
 - Same-class and cross-class static method calls
+- Reference assignability checks across class and interface hierarchies, including passing `String` values to JDK APIs that declare compatible supertypes such as `CharSequence`
 - Simple object allocation and constructor calls
 - Constructor calls with `int` and object-reference parameters
 - Instance field writes for `int` and object references
@@ -80,15 +81,17 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
 - Basic `HashMap<String, Integer>` insertion and entry-set iteration paths used by the integration tests
 - Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
+- Focused `Pattern.matches(String, CharSequence)` support for the regex constructs exercised by the integration tests, including `.`, `*`, `+`, and simple character classes such as `[0-9]`
 - Focused date/time shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `LocalDateTime.now()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
 - Class files up to the parser's supported class file version range
 
 Primitive arrays, string interning, full collection semantics, general
-invokedynamic bootstrap execution, long arithmetic, broad date formatting, and
-general native/JDK method execution are still unsupported. Unsupported bytecode
-or method shapes fail with an explicit error and an interpreted Java stacktrace
-that names each active class, method descriptor, and bytecode program counter.
+invokedynamic bootstrap execution, long arithmetic, broad date formatting,
+general regex execution, and general native/JDK method execution are still
+unsupported. Unsupported bytecode or method shapes fail with an explicit error
+and an interpreted Java stacktrace that names each active class, method
+descriptor, and bytecode program counter.
 
 ## Development
 

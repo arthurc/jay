@@ -97,6 +97,40 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Ok(())
     }
 
+    pub(super) fn invoke_pattern_matches(
+        &mut self,
+        caller: &mut Frame,
+        descriptor: &MethodDescriptor,
+        target_name: &str,
+    ) -> JayResult<()> {
+        let arguments = self.pop_method_arguments(
+            caller,
+            descriptor,
+            &format!("invokestatic target {target_name}"),
+        )?;
+        let [pattern, input] = arguments.as_slice() else {
+            return Err(JayError::new(
+                "Pattern.matches expected pattern and CharSequence arguments",
+            ));
+        };
+
+        let Value::Reference(pattern) = pattern else {
+            return Err(JayError::new("Pattern.matches received null pattern"));
+        };
+        let Value::Reference(input) = input else {
+            return Err(JayError::new("Pattern.matches received null input"));
+        };
+
+        let pattern = self.heap.string(*pattern)?;
+        let input = self
+            .heap
+            .string(*input)
+            .map_err(|_| JayError::new("Pattern.matches currently supports String input only"))?;
+        let matched = native::pattern_matches(pattern, input)?;
+        caller.stack.push(Value::Int(if matched { 1 } else { 0 }));
+        Ok(())
+    }
+
     pub(super) fn boxed_integer_value(&self, reference: ObjectRef) -> JayResult<i32> {
         match self
             .heap

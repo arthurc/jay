@@ -710,6 +710,36 @@ public class Main {
 }
 
 #[test]
+fn accepts_string_arguments_assignable_to_jdk_interfaces() {
+    let root = temp_dir("accepts-string-charsequence-assignability");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+import java.util.regex.Pattern;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(Pattern.matches("geeks.*", "geeksforgeeks"));
+        System.out.println(Pattern.matches("geeks[0-9]+", "geeks12s"));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "true\nfalse\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn invokes_interface_method_declared_on_superinterface() {
     let root = temp_dir("invokeinterface-superinterface-method");
     compile_java(

@@ -192,10 +192,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Ok(true);
         }
 
-        if actual_class == "java/lang/String" {
-            return Ok(false);
-        }
-
         self.reference_matches_type(actual_class, expected_class, &mut HashSet::new())
     }
 
@@ -227,5 +223,41 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
 
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::classpath::ClassResolver;
+
+    use super::Interpreter;
+
+    #[test]
+    fn string_is_assignable_to_char_sequence_but_not_unrelated_types() {
+        let root = std::env::temp_dir().join(format!(
+            "jay-resolution-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let classes = ClassResolver::new(PathBuf::from(&root)).unwrap();
+        let mut output = Vec::new();
+        let interpreter = Interpreter::new(&classes, &mut output);
+
+        assert!(
+            interpreter
+                .is_assignable_reference("java/lang/String", "java/lang/CharSequence")
+                .unwrap()
+        );
+        assert!(
+            !interpreter
+                .is_assignable_reference("java/lang/String", "java/util/List")
+                .unwrap()
+        );
     }
 }

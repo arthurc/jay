@@ -533,6 +533,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
             let descriptor = MethodDescriptor::parse(&target_descriptor)?;
             return self.invoke_string_value_of_object(caller, &descriptor, &target_name);
         }
+        if target_class_name == "java/util/regex/Pattern"
+            && target_method_name == "matches"
+            && target_descriptor == "(Ljava/lang/String;Ljava/lang/CharSequence;)Z"
+        {
+            let descriptor = MethodDescriptor::parse(&target_descriptor)?;
+            return self.invoke_pattern_matches(caller, &descriptor, &target_name);
+        }
         if target_class_name == "java/time/LocalDateTime"
             && target_method_name == "now"
             && target_descriptor == "()Ljava/time/LocalDateTime;"
