@@ -143,6 +143,7 @@ struct PatternToken {
 enum PatternAtom {
     Literal(char),
     Any,
+    Digit,
     CharacterClass(Vec<(char, char)>),
 }
 
@@ -151,6 +152,7 @@ enum Quantifier {
     One,
     ZeroOrMore,
     OneOrMore,
+    Exact(usize),
 }
 
 fn parse_pattern(pattern: &str) -> JayResult<Vec<PatternToken>> {
@@ -162,6 +164,18 @@ fn parse_pattern(pattern: &str) -> JayResult<Vec<PatternToken>> {
             '.' => {
                 index += 1;
                 PatternAtom::Any
+            }
+            '\\' => {
+                let escaped = *characters.get(index + 1).ok_or_else(|| {
+                    JayError::new(format!(
+                        "unsupported regex pattern {pattern}: dangling escape"
+                    ))
+                })?;
+                index += 2;
+                match escaped {
+                    'd' => PatternAtom::Digit,
+                    character => PatternAtom::Literal(character),
+                }
             }
             '[' => {
                 let (ranges, next_index) = parse_character_class(&characters, index)?;
@@ -189,6 +203,11 @@ fn parse_pattern(pattern: &str) -> JayResult<Vec<PatternToken>> {
                     index += 1;
                     Quantifier::OneOrMore
                 }
+                '{' => {
+                    let (count, next_index) = parse_exact_quantifier(&characters, index, pattern)?;
+                    index = next_index;
+                    Quantifier::Exact(count)
+                }
                 _ => Quantifier::One,
             }
         } else {
@@ -199,7 +218,40 @@ fn parse_pattern(pattern: &str) -> JayResult<Vec<PatternToken>> {
     Ok(tokens)
 }
 
-fn parse_character_class(characters: &[char], start: usize) -> JayResult<(Vec<(char, char)>, usize)> {
+fn parse_exact_quantifier(
+    characters: &[char],
+    start: usize,
+    pattern: &str,
+) -> JayResult<(usize, usize)> {
+    let mut index = start + 1;
+    let mut digits = String::new();
+    while let Some(character) = characters.get(index) {
+        match character {
+            '0'..='9' => {
+                digits.push(*character);
+                index += 1;
+            }
+            '}' if !digits.is_empty() => {
+                let count = digits.parse::<usize>().map_err(|error| {
+                    JayError::new(format!(
+                        "unsupported regex pattern {pattern}: invalid repetition count {digits}: {error}"
+                    ))
+                })?;
+                return Ok((count, index + 1));
+            }
+            _ => break,
+        }
+    }
+
+    Err(JayError::new(format!(
+        "unsupported regex pattern {pattern}: invalid exact repetition"
+    )))
+}
+
+fn parse_character_class(
+    characters: &[char],
+    start: usize,
+) -> JayResult<(Vec<(char, char)>, usize)> {
     let mut index = start + 1;
     let mut ranges = Vec::new();
     while index < characters.len() {
@@ -270,6 +322,11 @@ fn match_tokens(
             }
             false
         }
+        Quantifier::Exact(count) => {
+            let max_consumed = consecutive_match_count(&token.atom, input, input_index);
+            max_consumed >= count
+                && match_tokens(tokens, input, token_index + 1, input_index + count)
+        }
     }
 }
 
@@ -289,6 +346,7 @@ impl PatternAtom {
         match self {
             PatternAtom::Literal(expected) => *expected == character,
             PatternAtom::Any => true,
+            PatternAtom::Digit => character.is_ascii_digit(),
             PatternAtom::CharacterClass(ranges) => ranges
                 .iter()
                 .any(|(start, end)| *start <= character && character <= *end),
@@ -399,6 +457,13 @@ mod tests {
         assert!(pattern_matches("geeks.*", "geeksforgeeks").unwrap());
         assert!(!pattern_matches("geeks[0-9]+", "geeks12s").unwrap());
         assert!(pattern_matches("geeks[0-9]+", "geeks12").unwrap());
+    }
+
+    #[test]
+    fn matches_digit_escape_with_exact_repetition() {
+        assert!(pattern_matches(r"\d{4}", "1234").unwrap());
+        assert!(!pattern_matches(r"\d{4}", "123").unwrap());
+        assert!(!pattern_matches(r"\d{4}", "12a4").unwrap());
     }
 
     #[test]

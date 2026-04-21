@@ -740,6 +740,35 @@ public class Main {
 }
 
 #[test]
+fn matches_digit_escape_with_exact_repetition() {
+    let root = temp_dir("pattern-digit-escape-exact-repetition");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+import java.util.regex.Pattern;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(Pattern.matches("\\d{4}", "1234"));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "true\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn invokes_interface_method_declared_on_superinterface() {
     let root = temp_dir("invokeinterface-superinterface-method");
     compile_java(

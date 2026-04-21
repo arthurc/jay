@@ -357,7 +357,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-            .contains("expected reference on stack, found Int(42)")
+                .contains("expected reference on stack, found Int(42)")
         );
     }
 

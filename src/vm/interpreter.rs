@@ -214,7 +214,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
             0x7c => {
                 let right = frame.pop_int()? as u32;
                 let left = frame.pop_int()? as u32;
-                frame.stack.push(Value::Int((left >> (right & 0x1f)) as i32));
+                frame
+                    .stack
+                    .push(Value::Int((left >> (right & 0x1f)) as i32));
             }
             0x7e => {
                 let right = frame.pop_int()?;

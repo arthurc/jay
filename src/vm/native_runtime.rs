@@ -28,11 +28,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
         };
 
         let reference = self.heap.allocate_instance("java/lang/Integer");
-        self.heap.put_instance_field(
-            reference,
-            integer_value_field(),
-            Value::Int(*value),
-        )?;
+        self.heap
+            .put_instance_field(reference, integer_value_field(), Value::Int(*value))?;
         caller.stack.push(Value::Reference(reference));
         self.collect_if_needed(caller);
         Ok(())

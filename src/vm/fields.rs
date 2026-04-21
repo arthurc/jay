@@ -37,7 +37,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
 
         let descriptor = format!("[L{class_name};");
-        let reference = self.heap.allocate_reference_array(descriptor, length as usize);
+        let reference = self
+            .heap
+            .allocate_reference_array(descriptor, length as usize);
         frame.stack.push(Value::Reference(reference));
         self.collect_if_needed(frame);
         Ok(())

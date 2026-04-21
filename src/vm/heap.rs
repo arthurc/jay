@@ -434,7 +434,9 @@ mod tests {
 
         assert_eq!(
             heap.value_type(array).unwrap(),
-            Some(ValueType::Reference("[Ljava/util/HashMap$Node;".to_string()))
+            Some(ValueType::Reference(
+                "[Ljava/util/HashMap$Node;".to_string()
+            ))
         );
         assert_eq!(heap.type_name(array).unwrap(), "java.util.HashMap$Node[]");
     }
