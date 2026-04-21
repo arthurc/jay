@@ -1,6 +1,38 @@
 use crate::support::{compile_java, compile_java_sources, jay, temp_dir};
 
 #[test]
+fn system_register_natives_is_noop_during_class_initialization() {
+    let root = temp_dir("system-register-natives-noop");
+    compile_java(
+        &root,
+        "SystemRegisterNativesMain.java",
+        r#"
+public class SystemRegisterNativesMain {
+    public static void main(String[] args) {
+        System.getProperties();
+        System.out.println("ok");
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "SystemRegisterNativesMain"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed
+stdout:
+{}
+stderr:
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn putstatic_initializes_declaring_class_before_write() {
     let root = temp_dir("putstatic-initializes-class");
     compile_java(
@@ -136,5 +168,34 @@ public class ReentrantInitMain {
 
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n1\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn class_literal_loads_class_mirror_without_initializing_represented_class() {
+    let root = temp_dir("class-literal-desired-assertion-status");
+    compile_java(
+        &root,
+        "ClassLiteralMain.java",
+        r#"
+class SomeClass {
+    static {
+        System.out.println("initialized");
+    }
+}
+
+public class ClassLiteralMain {
+    public static void main(String[] args) {
+        System.out.println(SomeClass.class == SomeClass.class);
+        System.out.println(SomeClass.class.desiredAssertionStatus());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "ClassLiteralMain"]);
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "true\nfalse\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }

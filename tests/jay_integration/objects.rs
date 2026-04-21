@@ -369,6 +369,56 @@ public class Main {
 }
 
 #[test]
+fn prints_local_date_time_now_through_object_println() {
+    let root = temp_dir("local-date-time-now-object-println");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+import java.time.LocalDateTime;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(LocalDateTime.now());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.len(), "1970-01-01T00:00:00\n".len());
+    assert!(
+        stdout.chars().enumerate().all(|(index, character)| {
+            matches!(
+                (index, character),
+                (0..=3, '0'..='9')
+                    | (4, '-')
+                    | (5..=6, '0'..='9')
+                    | (7, '-')
+                    | (8..=9, '0'..='9')
+                    | (10, 'T')
+                    | (11..=12, '0'..='9')
+                    | (13, ':')
+                    | (14..=15, '0'..='9')
+                    | (16, ':')
+                    | (17..=18, '0'..='9')
+                    | (19, '\n')
+            )
+        }),
+        "stdout should be ISO-like LocalDateTime, got {stdout:?}"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn prints_null_through_object_println() {
     let root = temp_dir("null-object-println");
     compile_java(

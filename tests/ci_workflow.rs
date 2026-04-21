@@ -44,3 +44,31 @@ fn dependabot_updates_cargo_dependencies_and_github_actions() {
         );
     }
 }
+
+#[test]
+fn vm_facade_stays_small_and_interpreter_implementation_is_split() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let facade_path = manifest_dir.join("src/vm.rs");
+    let facade = fs::read_to_string(&facade_path).expect("expected src/vm.rs to exist");
+    let facade_line_count = facade.lines().count();
+
+    assert!(
+        facade_line_count <= 120,
+        "src/vm.rs should stay a small facade, found {facade_line_count} lines"
+    );
+
+    for module in [
+        "src/vm/interpreter.rs",
+        "src/vm/fields.rs",
+        "src/vm/invocation.rs",
+        "src/vm/lifecycle.rs",
+        "src/vm/native_runtime.rs",
+        "src/vm/resolution.rs",
+        "src/vm/runtime.rs",
+    ] {
+        assert!(
+            manifest_dir.join(module).exists(),
+            "VM implementation should include {module}"
+        );
+    }
+}

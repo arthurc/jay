@@ -74,6 +74,21 @@ pub(super) fn date_to_string(epoch_millis: i64) -> String {
     )
 }
 
+/// Formats Jay-created `LocalDateTime` values without interpreting the broad
+/// `java.time` JDK implementation.
+pub(super) fn local_date_time_to_string(epoch_millis: i64) -> String {
+    let date_time = utc_date_time(epoch_millis);
+    format!(
+        "{}-{}-{}T{}:{}:{}",
+        date_time.year,
+        two_digits(date_time.month),
+        two_digits(date_time.day),
+        two_digits(date_time.hour),
+        two_digits(date_time.minute),
+        two_digits(date_time.second)
+    )
+}
+
 pub(super) fn format_simple_date(
     pattern: &str,
     epoch_millis: i64,
@@ -157,6 +172,21 @@ mod tests {
     #[test]
     fn formats_epoch_date_to_jdk_style_gmt_string() {
         assert_eq!(date_to_string(0), "Thu Jan 01 00:00:00 GMT 1970");
+    }
+
+    #[test]
+    fn formats_epoch_millis_as_local_date_time_string() {
+        assert_eq!(local_date_time_to_string(0), "1970-01-01T00:00:00");
+    }
+
+    #[test]
+    fn formats_non_midnight_epoch_millis_as_local_date_time_string() {
+        let epoch_millis = 13 * MILLIS_PER_HOUR + 5 * MILLIS_PER_MINUTE + 9 * MILLIS_PER_SECOND;
+
+        assert_eq!(
+            local_date_time_to_string(epoch_millis),
+            "1970-01-01T13:05:09"
+        );
     }
 
     #[test]

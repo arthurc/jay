@@ -58,10 +58,11 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Directory classpaths for application classes
 - JDK boot class lookup through `JAVA_HOME/lib/modules`
 - `public static void main(String[] args)` and `public static void main()`
-- `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, and focused `System.out.println(Object)` support for `null`, `String`, and `Date`
+- `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, and focused `System.out.println(Object)` support for `null`, `String`, `Date`, and Jay-created `LocalDateTime`
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Limited heap-allocated `Object[]` arrays with allocation, length, load, and store bytecodes
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
+- Class literals loaded through `ldc` as cached `java.lang.Class` mirrors, with limited `Class.desiredAssertionStatus()` support that reports assertions as disabled
 - Limited `long` constants, local variables, fields, method parameters, and return values, including discarding unused `long` results from calls
 - Integer comparisons, branches, and simple loops
 - Null references in locals, fields, method calls, object arrays, casts, and reference comparison branches
@@ -77,7 +78,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Private instance method calls invoked with `invokevirtual` resolve to the declaring class (no subclass override dispatch)
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
 - Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
-- Focused date shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
+- Focused date/time shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `LocalDateTime.now()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
 - Class files up to the parser's supported class file version range
 
