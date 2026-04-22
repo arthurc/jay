@@ -239,9 +239,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             0x96 => {
                 let right = frame.pop_float()?;
                 let left = frame.pop_float()?;
-                let result = if left.is_nan() || right.is_nan() {
-                    1
-                } else if left > right {
+                let result = if left.is_nan() || right.is_nan() || left > right {
                     1
                 } else if left == right {
                     0

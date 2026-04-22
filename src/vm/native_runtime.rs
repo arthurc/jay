@@ -60,7 +60,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             }
             Value::Reference(reference) => {
                 let class_name = self.heap.instance_class_name(*reference).ok();
-                match class_name.as_deref() {
+                match class_name {
                     Some("java/lang/Integer") => {
                         let text = self.boxed_integer_value(*reference)?.to_string();
                         let reference = self.heap.allocate_string(text);
