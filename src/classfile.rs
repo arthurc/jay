@@ -112,6 +112,15 @@ impl ConstantPool {
         }
     }
 
+    pub fn float(&self, index: u16) -> JayResult<f32> {
+        match self.entry(index)? {
+            CpEntry::Float(value) => Ok(*value),
+            other => Err(JayError::new(format!(
+                "constant pool entry #{index} is not a float: {other:?}"
+            ))),
+        }
+    }
+
     pub fn long(&self, index: u16) -> JayResult<i64> {
         match self.entry(index)? {
             CpEntry::Long(value) => Ok(*value),
@@ -247,7 +256,7 @@ enum CpEntry {
     Unusable,
     Utf8(String),
     Integer(i32),
-    Float,
+    Float(f32),
     Long(i64),
     Double,
     Class {
@@ -361,10 +370,7 @@ impl<'a> Parser<'a> {
                     CpEntry::Utf8(value)
                 }
                 3 => CpEntry::Integer(self.read_u4()? as i32),
-                4 => {
-                    self.skip(4)?;
-                    CpEntry::Float
-                }
+                4 => CpEntry::Float(f32::from_bits(self.read_u4()?)),
                 5 => {
                     let high_bytes = self.read_u4()? as u64;
                     let low_bytes = self.read_u4()? as u64;
@@ -683,6 +689,33 @@ mod tests {
         let class_file = ClassFile::parse(&bytes).unwrap();
 
         assert_eq!(class_file.constant_pool.long(5).unwrap(), 1_234_567_890_123);
+    }
+
+    #[test]
+    fn parses_float_constants() {
+        let bytes = [
+            0xCA, 0xFE, 0xBA, 0xBE, // magic
+            0x00, 0x00, // minor
+            0x00, 0x45, // major 69
+            0x00, 0x06, // constant_pool_count
+            0x07, 0x00, 0x02, // #1 Class #2
+            0x01, 0x00, 0x05, b'E', b'm', b'p', b't', b'y', // #2 Utf8 Empty
+            0x07, 0x00, 0x04, // #3 Class #4
+            0x01, 0x00, 0x10, b'j', b'a', b'v', b'a', b'/', b'l', b'a', b'n', b'g', b'/', b'O',
+            b'b', b'j', b'e', b'c', b't', // #4 Utf8 java/lang/Object
+            0x04, 0x3F, 0x40, 0x00, 0x00, // #5 Float 0.75f
+            0x00, 0x21, // access_flags
+            0x00, 0x01, // this_class
+            0x00, 0x03, // super_class
+            0x00, 0x00, // interfaces_count
+            0x00, 0x00, // fields_count
+            0x00, 0x00, // methods_count
+            0x00, 0x00, // attributes_count
+        ];
+
+        let class_file = ClassFile::parse(&bytes).unwrap();
+
+        assert!((class_file.constant_pool.float(5).unwrap() - 0.75).abs() < f32::EPSILON);
     }
 
     #[test]

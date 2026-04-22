@@ -82,3 +82,54 @@ public class Main {
     );
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
+
+#[test]
+fn runs_hash_map_iteration_with_string_concat() {
+    let root = temp_dir("hash-map-iteration");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+import java.util.HashMap;
+import java.util.Map;
+
+public class Main {
+    public static void main(String[] args) {
+        HashMap<String, Integer> hashMap = new HashMap<>();
+        hashMap.put("John", 25);
+        hashMap.put("Jane", 30);
+        hashMap.put("Jim", 35);
+
+        for (Map.Entry<String, Integer> entry : hashMap.entrySet()) {
+            System.out.println(entry.getKey() + " -> " + entry.getValue());
+        }
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut lines = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    lines.sort();
+
+    assert_eq!(
+        lines,
+        vec![
+            "Jane -> 30".to_string(),
+            "Jim -> 35".to_string(),
+            "John -> 25".to_string()
+        ]
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}

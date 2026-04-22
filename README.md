@@ -60,8 +60,10 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - `public static void main(String[] args)` and `public static void main()`
 - `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, and focused `System.out.println(Object)` support for `null`, `String`, `Date`, and Jay-created `LocalDateTime`
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
-- Limited heap-allocated `Object[]` arrays with allocation, length, load, and store bytecodes
+- Limited heap-allocated reference arrays with allocation, length, load, and store bytecodes, including typed JDK arrays such as `HashMap$Node[]`
+- Runtime reference-array store validation that accepts assignable subtypes (for example, allowing `Integer` values in `Number[]`) and rejects incompatible values (for example, rejecting `Integer` values stored into `String[]`)
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
+- Focused `float` support for constants, fields, locals, and the arithmetic/conversion opcodes exercised by JDK `HashMap`
 - Class literals loaded through `ldc` as cached `java.lang.Class` mirrors, with limited `Class.desiredAssertionStatus()` support that reports assertions as disabled
 - Limited `long` constants, local variables, fields, method parameters, and return values, including discarding unused `long` results from calls
 - Integer comparisons, branches, and simple loops
@@ -69,6 +71,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Static fields and class initialization through static class initializers, including `putstatic`-triggered initialization, re-entrant initialization guards, preserving `putstatic` reference values across initializer-triggered GC, and resolving interface fields inherited from superinterfaces
 - Static method calls with `int` and object-reference parameters and `int`, object-reference, or `void` return values
 - Same-class and cross-class static method calls
+- Reference assignability checks across class and interface hierarchies, including passing `String` values to JDK APIs that declare compatible supertypes such as `CharSequence`
 - Simple object allocation and constructor calls
 - Constructor calls with `int` and object-reference parameters
 - Instance field writes for `int` and object references
@@ -77,16 +80,20 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Interface method calls that dispatch to receiver-class overrides or interface default methods, including methods inherited from superinterfaces
 - Private instance method calls invoked with `invokevirtual` resolve to the declaring class (no subclass override dispatch)
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
+- Basic `HashMap<String, Integer>` insertion and entry-set iteration paths used by the integration tests
 - Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
+- Focused `String.valueOf(Object)` behavior with `null` handling, `Integer`/`String` fast paths, and virtual `toString()` fallback for general objects (including array receivers via `Object`-style formatting)
+- Focused `Pattern.matches(String, CharSequence)` support for the regex constructs exercised by the integration tests, including `.`, `*`, `+`, exact repetition like `{4}`, digit escapes like `\d`, and simple character classes such as `[0-9]`
 - Focused date/time shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `LocalDateTime.now()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
 - Class files up to the parser's supported class file version range
 
 Primitive arrays, string interning, full collection semantics, general
-invokedynamic bootstrap execution, long arithmetic, broad date formatting, and
-general native/JDK method execution are still unsupported. Unsupported bytecode
-or method shapes fail with an explicit error and an interpreted Java stacktrace
-that names each active class, method descriptor, and bytecode program counter.
+invokedynamic bootstrap execution, long arithmetic, broad date formatting,
+general regex execution, and general native/JDK method execution are still
+unsupported. Unsupported bytecode or method shapes fail with an explicit error
+and an interpreted Java stacktrace that names each active class, method
+descriptor, and bytecode program counter.
 
 ## Development
 

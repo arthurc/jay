@@ -4,13 +4,14 @@ use super::descriptors::ValueType;
 use super::heap::{Heap, ObjectRef};
 use crate::JayResult;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) enum Value {
     Uninitialized,
     /// JVM null reference value for unassigned reference fields, array slots,
     /// and explicit `aconst_null` bytecode.
     Null,
     Int(i32),
+    Float(f32),
     Long(i64),
     Reference(ObjectRef),
     PrintStream,
@@ -20,6 +21,7 @@ impl Value {
     pub(super) fn value_type(&self, heap: &Heap) -> JayResult<Option<ValueType>> {
         match self {
             Value::Int(_) => Ok(Some(ValueType::Int)),
+            Value::Float(_) => Ok(Some(ValueType::Float)),
             Value::Long(_) => Ok(Some(ValueType::Long)),
             Value::Reference(reference) => heap.value_type(*reference),
             Value::Uninitialized | Value::Null | Value::PrintStream => Ok(None),
@@ -31,6 +33,7 @@ impl Value {
             Value::Uninitialized => Ok("uninitialized".to_string()),
             Value::Null => Ok("null".to_string()),
             Value::Int(_) => Ok("int".to_string()),
+            Value::Float(_) => Ok("float".to_string()),
             Value::Long(_) => Ok("long".to_string()),
             Value::Reference(reference) => heap.type_name(*reference),
             Value::PrintStream => Ok("PrintStream".to_string()),
@@ -43,6 +46,7 @@ impl Value {
             Value::Uninitialized
             | Value::Null
             | Value::Int(_)
+            | Value::Float(_)
             | Value::Long(_)
             | Value::PrintStream => None,
         }

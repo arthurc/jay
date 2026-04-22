@@ -710,6 +710,65 @@ public class Main {
 }
 
 #[test]
+fn accepts_string_arguments_assignable_to_jdk_interfaces() {
+    let root = temp_dir("accepts-string-charsequence-assignability");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+import java.util.regex.Pattern;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(Pattern.matches("geeks.*", "geeksforgeeks"));
+        System.out.println(Pattern.matches("geeks[0-9]+", "geeks12s"));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "true\nfalse\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn matches_digit_escape_with_exact_repetition() {
+    let root = temp_dir("pattern-digit-escape-exact-repetition");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+import java.util.regex.Pattern;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(Pattern.matches("\\d{4}", "1234"));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "true\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn invokes_interface_method_declared_on_superinterface() {
     let root = temp_dir("invokeinterface-superinterface-method");
     compile_java(
@@ -1044,6 +1103,174 @@ public class Main {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "A\nB\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn string_value_of_uses_virtual_to_string_for_objects() {
+    let root = temp_dir("string-value-of-virtual-tostring");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Car {
+    @Override
+    public String toString() {
+        return "Car";
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Car car = new Car();
+        System.out.println(String.valueOf(car));
+        System.out.println("vehicle=" + car);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed
+stdout:
+{}
+stderr:
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Car
+vehicle=Car
+"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn creates_multidimensional_reference_arrays_with_anewarray_component_descriptors() {
+    let root = temp_dir("multidimensional-reference-arrays");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        String[][] matrix = new String[1][];
+        matrix[0] = new String[] { "ok" };
+        System.out.println(matrix[0][0]);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed
+stdout:
+{}
+stderr:
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "ok
+"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn string_value_of_accepts_array_receivers() {
+    let root = temp_dir("string-value-of-array");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        String[] values = new String[] { "a", "b" };
+        System.out.println(String.valueOf(values));
+        System.out.println("values=" + values);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("[Ljava.lang.String;@"));
+    assert!(stdout.contains("\nvalues=[Ljava.lang.String;@"));
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn stores_assignable_subtypes_in_reference_arrays() {
+    let root = temp_dir("assignable-reference-array-store");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        Number[] numbers = new Number[1];
+        numbers[0] = Integer.valueOf(7);
+        System.out.println(((Integer) numbers[0]).intValue());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn rejects_incompatible_reference_array_stores() {
+    let root = temp_dir("reject-incompatible-reference-array-store");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        Object[] values = new String[1];
+        values[0] = Integer.valueOf(5);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(!output.status.success(), "jay unexpectedly succeeded");
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("cannot store java.lang.Integer in java.lang.String[]")
+    );
 }
 
 #[test]

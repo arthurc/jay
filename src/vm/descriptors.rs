@@ -51,6 +51,7 @@ pub(super) enum ReturnType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ValueType {
     Int,
+    Float,
     Long,
     /// A reference type name or descriptor, such as `java/lang/String` or `[Ljava/lang/Object;`.
     Reference(String),
@@ -60,6 +61,7 @@ impl ValueType {
     pub(super) fn name(&self) -> String {
         match self {
             ValueType::Int => "int".to_string(),
+            ValueType::Float => "float".to_string(),
             ValueType::Long => "long".to_string(),
             ValueType::Reference(class_name) => class_name.replace('/', "."),
         }
@@ -82,6 +84,7 @@ impl ReturnType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FieldType {
     Int,
+    Float,
     Long,
     Reference,
 }
@@ -99,6 +102,10 @@ fn parse_complete_value_type(input: &str, descriptor: &str) -> JayResult<ValueTy
 pub(super) fn parse_field_descriptor(descriptor: &str) -> JayResult<FieldType> {
     if descriptor == "I" || descriptor == "Z" {
         return Ok(FieldType::Int);
+    }
+
+    if descriptor == "F" {
+        return Ok(FieldType::Float);
     }
 
     if descriptor == "J" {
@@ -131,6 +138,10 @@ fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueTyp
 
     if let Some(remaining) = input.strip_prefix('Z') {
         return Ok((ValueType::Int, remaining));
+    }
+
+    if let Some(remaining) = input.strip_prefix('F') {
+        return Ok((ValueType::Float, remaining));
     }
 
     if let Some(remaining) = input.strip_prefix('J') {
@@ -197,6 +208,7 @@ mod tests {
     fn parses_supported_field_descriptors() {
         assert_eq!(parse_field_descriptor("I").unwrap(), FieldType::Int);
         assert_eq!(parse_field_descriptor("Z").unwrap(), FieldType::Int);
+        assert_eq!(parse_field_descriptor("F").unwrap(), FieldType::Float);
         assert_eq!(parse_field_descriptor("J").unwrap(), FieldType::Long);
         assert_eq!(
             parse_field_descriptor("Ljava/lang/String;").unwrap(),
@@ -221,11 +233,11 @@ mod tests {
                 .contains("unsupported array field descriptor")
         );
 
-        let long_error = parse_field_descriptor("F").unwrap_err();
+        let long_error = parse_field_descriptor("D").unwrap_err();
         assert!(
             long_error
                 .to_string()
-                .contains("unsupported field descriptor F")
+                .contains("unsupported field descriptor D")
         );
     }
 
@@ -254,6 +266,14 @@ mod tests {
 
         assert_eq!(descriptor.parameter_types, vec![ValueType::Long]);
         assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Long));
+    }
+
+    #[test]
+    fn parses_float_method_descriptors() {
+        let descriptor = MethodDescriptor::parse("(F)F").unwrap();
+
+        assert_eq!(descriptor.parameter_types, vec![ValueType::Float]);
+        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Float));
     }
 
     #[test]
