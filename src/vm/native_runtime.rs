@@ -116,6 +116,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
             self.invoke_date_to_string(&mut frame, receiver)?;
             return frame.pop_object_ref();
         }
+        if receiver_class_name.starts_with('[') {
+            let identity = self.heap.object_identity(receiver)?;
+            let text = format!("{}@{identity:x}", receiver_class_name.replace('/', "."));
+            return Ok(self.heap.allocate_string(text));
+        }
 
         let target_method_name = "toString".to_string();
         let target_descriptor = "()Ljava/lang/String;".to_string();
@@ -127,8 +132,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let (target_class_file, target_method) = if declaring_method.is_private() {
             (declaring_class_file, declaring_method)
         } else {
+            let dispatch_class_name = if receiver_class_name.starts_with('[') {
+                "java/lang/Object"
+            } else {
+                &receiver_class_name
+            };
             let class_file = self.resolve_instance_method_class(
-                &receiver_class_name,
+                dispatch_class_name,
                 &target_method_name,
                 &target_descriptor,
             )?;

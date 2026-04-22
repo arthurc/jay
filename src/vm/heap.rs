@@ -225,6 +225,21 @@ impl Heap {
         }
     }
 
+    pub(super) fn array_descriptor(&self, reference: ObjectRef) -> JayResult<&str> {
+        match self.object(reference)?.kind {
+            ObjectKind::ObjectArray { ref descriptor, .. } => Ok(descriptor),
+            _ => Err(JayError::new(format!(
+                "expected object array reference, found {}",
+                self.type_name(reference)?
+            ))),
+        }
+    }
+
+    pub(super) fn object_identity(&self, reference: ObjectRef) -> JayResult<usize> {
+        self.object(reference)?;
+        Ok(reference.0)
+    }
+
     pub(super) fn store_array_reference(
         &mut self,
         reference: ObjectRef,
@@ -386,11 +401,7 @@ fn is_reference_store_compatible(actual: &str, array_descriptor: &str) -> bool {
         return actual == expected_component;
     }
 
-    let expected_class = expected_component
-        .strip_prefix('L')
-        .and_then(|component| component.strip_suffix(';'))
-        .unwrap_or(expected_component);
-    actual == expected_class
+    !actual.starts_with('[')
 }
 
 #[cfg(test)]
@@ -472,20 +483,13 @@ mod tests {
     }
 
     #[test]
-    fn heap_rejects_incompatible_reference_array_stores() {
+    fn heap_allows_reference_stores_for_class_components() {
         let mut heap = Heap::new();
         let array = heap.allocate_reference_array("[Ljava/lang/String;", 1);
         let value = heap.allocate_instance("java/lang/Integer");
 
-        let error = heap
-            .store_array_reference(array, 0, Value::Reference(value))
-            .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("cannot store java.lang.Integer in java.lang.String[]")
-        );
+        heap.store_array_reference(array, 0, Value::Reference(value))
+            .unwrap();
     }
 
     #[test]

@@ -381,6 +381,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 let value = frame.pop_reference()?;
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
+                self.validate_reference_array_store(reference, &value)?;
                 self.heap
                     .store_array_reference(reference, checked_array_index(index)?, value)?;
             }
@@ -392,4 +393,57 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
         Ok(InstructionResult::Continue)
     }
+}
+
+impl<'a, W: Write> Interpreter<'a, W> {
+    fn validate_reference_array_store(&self, array: ObjectRef, value: &Value) -> JayResult<()> {
+        let Value::Reference(stored_reference) = value else {
+            return Ok(());
+        };
+
+        let actual = match self.heap.value_type(*stored_reference)? {
+            Some(super::descriptors::ValueType::Reference(reference_type)) => reference_type,
+            Some(other) => {
+                return Err(JayError::new(format!(
+                    "array store value had unexpected type {}",
+                    other.name()
+                )));
+            }
+            None => return Err(JayError::new("array store value type is unavailable")),
+        };
+
+        let descriptor = self.heap.array_descriptor(array)?.to_string();
+        let Some(expected_component) = descriptor.strip_prefix('[') else {
+            return Err(JayError::new(format!(
+                "malformed reference array descriptor {descriptor}"
+            )));
+        };
+        let expected = expected_component
+            .strip_prefix('L')
+            .and_then(|component| component.strip_suffix(';'))
+            .unwrap_or(expected_component);
+
+        let compatible = if actual.starts_with('[') != expected.starts_with('[') {
+            expected == "java/lang/Object"
+        } else {
+            self.is_assignable_reference(&actual, expected)?
+        };
+        if compatible {
+            return Ok(());
+        }
+
+        Err(JayError::new(format!(
+            "cannot store {} in {}",
+            self.heap.type_name(*stored_reference)?,
+            reference_array_name(&descriptor)
+        )))
+    }
+}
+
+fn reference_array_name(descriptor: &str) -> String {
+    descriptor
+        .strip_prefix("[L")
+        .and_then(|descriptor| descriptor.strip_suffix(';'))
+        .map(|class_name| format!("{}[]", class_name.replace('/', ".")))
+        .unwrap_or_else(|| descriptor.replace('/', "."))
 }

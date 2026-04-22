@@ -1188,6 +1188,92 @@ stderr:
 }
 
 #[test]
+fn string_value_of_accepts_array_receivers() {
+    let root = temp_dir("string-value-of-array");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        String[] values = new String[] { "a", "b" };
+        System.out.println(String.valueOf(values));
+        System.out.println("values=" + values);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("[Ljava.lang.String;@"));
+    assert!(stdout.contains("\nvalues=[Ljava.lang.String;@"));
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn stores_assignable_subtypes_in_reference_arrays() {
+    let root = temp_dir("assignable-reference-array-store");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        Number[] numbers = new Number[1];
+        numbers[0] = Integer.valueOf(7);
+        System.out.println(((Integer) numbers[0]).intValue());
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn rejects_incompatible_reference_array_stores() {
+    let root = temp_dir("reject-incompatible-reference-array-store");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        Object[] values = new String[1];
+        values[0] = Integer.valueOf(5);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(!output.status.success(), "jay unexpectedly succeeded");
+    assert!(String::from_utf8_lossy(&output.stdout).is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("cannot store java.lang.Integer in java.lang.String[]")
+    );
+}
+
+#[test]
 fn runs_constructor_expression_statement() {
     let root = temp_dir("constructor-expression-statement");
     compile_java(

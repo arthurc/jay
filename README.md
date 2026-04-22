@@ -61,7 +61,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, and focused `System.out.println(Object)` support for `null`, `String`, `Date`, and Jay-created `LocalDateTime`
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Limited heap-allocated reference arrays with allocation, length, load, and store bytecodes, including typed JDK arrays such as `HashMap$Node[]`
-- Runtime reference-array store validation for incompatible reference values (for example, rejecting `Integer` values stored into `String[]`)
+- Runtime reference-array store validation that accepts assignable subtypes (for example, allowing `Integer` values in `Number[]`) and rejects incompatible values (for example, rejecting `Integer` values stored into `String[]`)
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
 - Focused `float` support for constants, fields, locals, and the arithmetic/conversion opcodes exercised by JDK `HashMap`
 - Class literals loaded through `ldc` as cached `java.lang.Class` mirrors, with limited `Class.desiredAssertionStatus()` support that reports assertions as disabled
@@ -82,7 +82,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
 - Basic `HashMap<String, Integer>` insertion and entry-set iteration paths used by the integration tests
 - Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
-- Focused `String.valueOf(Object)` behavior with `null` handling, `Integer`/`String` fast paths, and virtual `toString()` fallback for general objects
+- Focused `String.valueOf(Object)` behavior with `null` handling, `Integer`/`String` fast paths, and virtual `toString()` fallback for general objects (including array receivers via `Object`-style formatting)
 - Focused `Pattern.matches(String, CharSequence)` support for the regex constructs exercised by the integration tests, including `.`, `*`, `+`, exact repetition like `{4}`, digit escapes like `\d`, and simple character classes such as `[0-9]`
 - Focused date/time shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `LocalDateTime.now()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
