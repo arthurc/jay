@@ -14,4 +14,7 @@ Implement changes in a red-green-refactor loop:
 2. Make the smallest implementation change needed for the test to pass.
 3. Refactor while keeping the test suite green.
 
+Before creating a commit, run `cargo fmt` and `cargo clippy` and fix any
+reported issues.
+
 Write git commit messages using Conventional Commits.
