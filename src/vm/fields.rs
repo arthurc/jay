@@ -36,7 +36,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Err(JayError::new(format!("negative array length {length}")));
         }
 
-        let descriptor = format!("[L{class_name};");
+        let descriptor = reference_array_descriptor(class_name);
         let reference = self
             .heap
             .allocate_reference_array(descriptor, length as usize);
@@ -248,5 +248,34 @@ impl<'a, W: Write> Interpreter<'a, W> {
             self.resolve_field_class(field.class_name, field.name, field.descriptor)?;
         let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
         self.heap.put_instance_field(receiver, field_key, value)
+    }
+}
+
+fn reference_array_descriptor(component_type: &str) -> String {
+    if component_type.starts_with('[') {
+        format!("[{component_type}")
+    } else {
+        format!("[L{component_type};")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reference_array_descriptor;
+
+    #[test]
+    fn builds_reference_array_descriptor_for_class_components() {
+        assert_eq!(
+            reference_array_descriptor("java/lang/String"),
+            "[Ljava/lang/String;"
+        );
+    }
+
+    #[test]
+    fn builds_reference_array_descriptor_for_array_components() {
+        assert_eq!(
+            reference_array_descriptor("[Ljava/lang/String;"),
+            "[[Ljava/lang/String;"
+        );
     }
 }

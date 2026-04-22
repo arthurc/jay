@@ -76,10 +76,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
                         caller.stack.push(Value::Reference(*reference));
                     }
                     _ => {
-                        let text = self.println_object_text(value.clone())?;
-                        let reference = self.heap.allocate_string(text);
+                        let reference = self.invoke_reference_to_string(caller, *reference)?;
                         caller.stack.push(Value::Reference(reference));
-                        self.collect_if_needed(caller);
                     }
                 }
             }
@@ -92,6 +90,101 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
 
         Ok(())
+    }
+
+    fn invoke_reference_to_string(
+        &mut self,
+        caller: &mut Frame,
+        receiver: ObjectRef,
+    ) -> JayResult<ObjectRef> {
+        let receiver_class_name = match self.heap.value_type(receiver)? {
+            Some(super::descriptors::ValueType::Reference(class_name)) => class_name,
+            Some(other) => {
+                return Err(JayError::new(format!(
+                    "String.valueOf(Object) receiver had unexpected type {}",
+                    other.name()
+                )));
+            }
+            None => {
+                return Err(JayError::new(
+                    "String.valueOf(Object) receiver type is unavailable",
+                ));
+            }
+        };
+        if receiver_class_name == "java/util/Date" {
+            let mut frame = Frame::new(0);
+            self.invoke_date_to_string(&mut frame, receiver)?;
+            return frame.pop_object_ref();
+        }
+
+        let target_method_name = "toString".to_string();
+        let target_descriptor = "()Ljava/lang/String;".to_string();
+        let (declaring_class_file, declaring_method) = self.resolve_instance_method(
+            "java/lang/Object",
+            &target_method_name,
+            &target_descriptor,
+        )?;
+        let (target_class_file, target_method) = if declaring_method.is_private() {
+            (declaring_class_file, declaring_method)
+        } else {
+            let class_file = self.resolve_instance_method_class(
+                &receiver_class_name,
+                &target_method_name,
+                &target_descriptor,
+            )?;
+            let method = class_file
+                .find_method(&target_method_name, &target_descriptor)
+                .ok_or_else(|| {
+                    let target_name = format!(
+                        "{}.{}{}",
+                        class_file.this_class.replace('/', "."),
+                        target_method_name,
+                        target_descriptor
+                    );
+                    JayError::new(format!(
+                        "String.valueOf(Object) target {target_name} not found"
+                    ))
+                })?
+                .clone();
+            (class_file, method)
+        };
+
+        if target_method.is_static() {
+            return Err(JayError::new(
+                "String.valueOf(Object) toString target must not be static",
+            ));
+        }
+
+        if target_method.access_flags & 0x0100 != 0 || target_method.access_flags & 0x0400 != 0 {
+            return Err(JayError::new(
+                "String.valueOf(Object) toString target must not be native or abstract",
+            ));
+        }
+
+        let code = target_method
+            .code
+            .as_ref()
+            .ok_or_else(|| JayError::new("String.valueOf(Object) toString target has no Code"))?
+            .clone();
+        let mut callee = Frame::with_arguments(code.max_locals, vec![Value::Reference(receiver)])?;
+        self.saved_roots
+            .push(caller.roots().cloned().collect::<Vec<_>>());
+        let result = self.execute(&target_class_file, &target_method, &code, &mut callee);
+        self.saved_roots.pop();
+
+        match result? {
+            Some(Value::Reference(reference)) => Ok(reference),
+            Some(Value::Null) => Err(JayError::new(
+                "String.valueOf(Object) toString returned null",
+            )),
+            Some(other) => Err(JayError::new(format!(
+                "String.valueOf(Object) toString returned {}",
+                other.type_name(&self.heap)?
+            ))),
+            None => Err(JayError::new(
+                "String.valueOf(Object) toString returned void",
+            )),
+        }
     }
 
     pub(super) fn invoke_pattern_matches(

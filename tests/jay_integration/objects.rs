@@ -1106,6 +1106,88 @@ public class Main {
 }
 
 #[test]
+fn string_value_of_uses_virtual_to_string_for_objects() {
+    let root = temp_dir("string-value-of-virtual-tostring");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Car {
+    @Override
+    public String toString() {
+        return "Car";
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Car car = new Car();
+        System.out.println(String.valueOf(car));
+        System.out.println("vehicle=" + car);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed
+stdout:
+{}
+stderr:
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Car
+vehicle=Car
+"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn creates_multidimensional_reference_arrays_with_anewarray_component_descriptors() {
+    let root = temp_dir("multidimensional-reference-arrays");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        String[][] matrix = new String[1][];
+        matrix[0] = new String[] { "ok" };
+        System.out.println(matrix[0][0]);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed
+stdout:
+{}
+stderr:
+{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "ok
+"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_constructor_expression_statement() {
     let root = temp_dir("constructor-expression-statement");
     compile_java(
