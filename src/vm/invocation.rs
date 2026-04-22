@@ -19,44 +19,64 @@ impl<'a, W: Write> Interpreter<'a, W> {
         index: u16,
     ) -> JayResult<()> {
         let method = class_file.constant_pool.method_ref(index)?;
-        if method.class_name == "java/io/PrintStream" && method.name == "println" {
-            return match method.descriptor {
-                "(Ljava/lang/String;)V" => {
+        if method.class_name == "java/io/PrintStream" {
+            return match (method.name, method.descriptor) {
+                ("print", "(Ljava/lang/String;)V") => {
+                    let reference = frame.pop_string_reference(&self.heap)?;
+                    frame.pop_print_stream()?;
+                    let value = self.heap.string(reference)?;
+                    write!(self.output, "{value}")?;
+                    Ok(())
+                }
+                ("println", "()V") => {
+                    frame.pop_print_stream()?;
+                    writeln!(self.output)?;
+                    Ok(())
+                }
+                ("println", "(Ljava/lang/String;)V") => {
                     let reference = frame.pop_string_reference(&self.heap)?;
                     frame.pop_print_stream()?;
                     let value = self.heap.string(reference)?;
                     writeln!(self.output, "{value}")?;
                     Ok(())
                 }
-                "(Ljava/lang/Object;)V" => {
+                ("println", "(Ljava/lang/Object;)V") => {
                     let value = frame.pop_reference()?;
                     frame.pop_print_stream()?;
                     let text = self.println_object_text(value)?;
                     writeln!(self.output, "{text}")?;
                     Ok(())
                 }
-                "(I)V" => {
+                ("println", "(I)V") => {
                     let value = frame.pop_int()?;
                     frame.pop_print_stream()?;
                     writeln!(self.output, "{value}")?;
                     Ok(())
                 }
-                "(J)V" => {
+                ("println", "(J)V") => {
                     let value = frame.pop_long()?;
                     frame.pop_print_stream()?;
                     writeln!(self.output, "{value}")?;
                     Ok(())
                 }
-                "(Z)V" => {
+                ("println", "(Z)V") => {
                     let value = frame.pop_int()?;
                     frame.pop_print_stream()?;
                     let text = if value == 0 { "false" } else { "true" };
                     writeln!(self.output, "{text}")?;
                     Ok(())
                 }
-                _ => Err(JayError::new(format!(
+                ("println", _) => Err(JayError::new(format!(
                     "unsupported PrintStream.println descriptor {}",
                     method.descriptor
+                ))),
+                ("print", _) => Err(JayError::new(format!(
+                    "unsupported PrintStream.print descriptor {}",
+                    method.descriptor
+                ))),
+                _ => Err(JayError::new(format!(
+                    "unsupported PrintStream method {}{}",
+                    method.name, method.descriptor
                 ))),
             };
         }

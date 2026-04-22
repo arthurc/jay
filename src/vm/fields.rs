@@ -45,6 +45,18 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Ok(())
     }
 
+    pub(super) fn new_int_array(&mut self, frame: &mut Frame) -> JayResult<()> {
+        let length = frame.pop_int()?;
+        if length < 0 {
+            return Err(JayError::new(format!("negative array length {length}")));
+        }
+
+        let reference = self.heap.allocate_int_array(length as usize);
+        frame.stack.push(Value::Reference(reference));
+        self.collect_if_needed(frame);
+        Ok(())
+    }
+
     pub(super) fn load_constant(
         &mut self,
         class_file: &ClassFile,

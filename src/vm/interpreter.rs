@@ -157,6 +157,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
             0x22..=0x25 => frame.load_float_local((opcode - 0x22) as usize)?,
             0x1e..=0x21 => frame.load_long_local((opcode - 0x1e) as usize)?,
             0x2a..=0x2d => frame.load_reference_local((opcode - 0x2a) as usize)?,
+            0x2e => {
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                let value = self
+                    .heap
+                    .load_array_int(reference, checked_array_index(index)?)?;
+                frame.stack.push(Value::Int(value));
+            }
             0x36 => {
                 let index = read_u1(&code.bytes, pc)? as usize;
                 frame.store_int_local(index)?;
@@ -177,6 +185,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
             0x43..=0x46 => frame.store_float_local((opcode - 0x43) as usize)?,
             0x3f..=0x42 => frame.store_long_local((opcode - 0x3f) as usize)?,
             0x4b..=0x4e => frame.store_reference_local((opcode - 0x4b) as usize)?,
+            0x4f => {
+                let value = frame.pop_int()?;
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                self.heap
+                    .store_array_int(reference, checked_array_index(index)?, value)?;
+            }
             0x57 => {
                 let _ = frame.pop()?;
             }
@@ -345,6 +360,13 @@ impl<'a, W: Write> Interpreter<'a, W> {
             0xbb => {
                 let index = read_u2(&code.bytes, pc)?;
                 self.new_object(class_file, frame, index)?;
+            }
+            0xbc => {
+                let atype = read_u1(&code.bytes, pc)?;
+                match atype {
+                    10 => self.new_int_array(frame)?,
+                    _ => return Err(JayError::new(format!("unsupported newarray atype {atype}"))),
+                }
             }
             0xbd => {
                 let index = read_u2(&code.bytes, pc)?;

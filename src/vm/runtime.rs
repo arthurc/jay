@@ -193,3 +193,15 @@ pub(super) fn apply_string_concat_recipe(recipe: &str, arguments: &[String]) -> 
 
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_array_index_rejects_negative_values() {
+        let error = checked_array_index(-1).unwrap_err();
+
+        assert!(error.to_string().contains("negative array index -1"));
+    }
+}

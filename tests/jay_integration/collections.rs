@@ -1,6 +1,47 @@
 use crate::support::{compile_java, jay, temp_dir};
 
 #[test]
+fn runs_primitive_and_reference_array_iteration() {
+    let root = temp_dir("primitive-and-reference-array-iteration");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    public static void main(String[] args) {
+        int[] numbers = {10, 20, 30, 40};
+        System.out.print("Primitive Array -> ");
+        for (int i = 0; i < numbers.length; i++) {
+            System.out.print(numbers[i] + " ");
+        }
+        System.out.println();
+
+        String[] names = {"Lakshit", "Rahul", "Pankaj"};
+        System.out.print("Non-Primitive Array -> ");
+        for (int i = 0; i < names.length; i++) {
+            System.out.print(names[i] + " ");
+        }
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Primitive Array -> 10 20 30 40 \nNon-Primitive Array -> Lakshit Rahul Pankaj "
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn runs_array_list_iterator_has_next() {
     let root = temp_dir("array-list-iterator-has-next");
     compile_java(

@@ -58,9 +58,10 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Directory classpaths for application classes
 - JDK boot class lookup through `JAVA_HOME/lib/modules`
 - `public static void main(String[] args)` and `public static void main()`
-- `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, and focused `System.out.println(Object)` support for `null`, `String`, `Date`, and Jay-created `LocalDateTime`
+- `System.out.print(String)`, `System.out.println()`, `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, and focused `System.out.println(Object)` support for `null`, `String`, `Date`, and Jay-created `LocalDateTime`
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Limited heap-allocated reference arrays with allocation, length, load, and store bytecodes, including typed JDK arrays such as `HashMap$Node[]`
+- Limited heap-allocated primitive `int[]` arrays with `newarray`, `iaload`, `iastore`, and `arraylength`
 - Integer constants, local variables, addition, subtraction, multiplication, division, and increment
 - Focused `float` support for constants, fields, locals, and the arithmetic/conversion opcodes exercised by JDK `HashMap`
 - Class literals loaded through `ldc` as cached `java.lang.Class` mirrors, with limited `Class.desiredAssertionStatus()` support that reports assertions as disabled
@@ -86,12 +87,13 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Constructor expression statements (for example `new Empty();`)
 - Class files up to the parser's supported class file version range
 
-Primitive arrays, string interning, full collection semantics, general
-invokedynamic bootstrap execution, long arithmetic, broad date formatting,
-general regex execution, and general native/JDK method execution are still
-unsupported. Unsupported bytecode or method shapes fail with an explicit error
-and an interpreted Java stacktrace that names each active class, method
-descriptor, and bytecode program counter.
+Other primitive arrays, primitive-array field and method descriptors, string
+interning, full collection semantics, general invokedynamic bootstrap
+execution, long arithmetic, broad date formatting, general regex execution,
+and general native/JDK method execution are still unsupported. Unsupported
+bytecode or method shapes fail with an explicit error and an interpreted Java
+stacktrace that names each active class, method descriptor, and bytecode
+program counter.
 
 ## Development
 

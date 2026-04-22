@@ -36,6 +36,9 @@ enum ObjectKind {
         descriptor: String,
         elements: Vec<Value>,
     },
+    IntArray {
+        elements: Vec<i32>,
+    },
 }
 
 /// Identifies a field exactly as it appears in a class constant pool.
@@ -92,6 +95,12 @@ impl Heap {
         })
     }
 
+    pub(super) fn allocate_int_array(&mut self, length: usize) -> ObjectRef {
+        self.allocate(ObjectKind::IntArray {
+            elements: vec![0; length],
+        })
+    }
+
     fn allocate(&mut self, kind: ObjectKind) -> ObjectRef {
         let object = HeapObject {
             marked: false,
@@ -119,6 +128,9 @@ impl Heap {
                 "expected String reference, found {}",
                 reference_array_name(descriptor)
             ))),
+            ObjectKind::IntArray { .. } => {
+                Err(JayError::new("expected String reference, found int[]"))
+            }
         }
     }
 
@@ -131,6 +143,7 @@ impl Heap {
             ObjectKind::ObjectArray { ref descriptor, .. } => {
                 Ok(Some(ValueType::Reference(descriptor.clone())))
             }
+            ObjectKind::IntArray { .. } => Ok(Some(ValueType::Reference("[I".to_string()))),
         }
     }
 
@@ -139,6 +152,7 @@ impl Heap {
             ObjectKind::String(_) => Ok("String".to_string()),
             ObjectKind::Instance { ref class_name, .. } => Ok(class_name.replace('/', ".")),
             ObjectKind::ObjectArray { ref descriptor, .. } => Ok(reference_array_name(descriptor)),
+            ObjectKind::IntArray { .. } => Ok("int[]".to_string()),
         }
     }
 
@@ -152,6 +166,9 @@ impl Heap {
                 "expected instance reference, found {}",
                 reference_array_name(descriptor)
             ))),
+            ObjectKind::IntArray { .. } => {
+                Err(JayError::new("expected instance reference, found int[]"))
+            }
         }
     }
 
@@ -173,6 +190,9 @@ impl Heap {
                 "expected instance reference for putfield, found {}",
                 reference_array_name(descriptor)
             ))),
+            ObjectKind::IntArray { .. } => Err(JayError::new(
+                "expected instance reference for putfield, found int[]",
+            )),
         }
     }
 
@@ -190,14 +210,18 @@ impl Heap {
                 "expected instance reference for getfield, found {}",
                 reference_array_name(descriptor)
             ))),
+            ObjectKind::IntArray { .. } => Err(JayError::new(
+                "expected instance reference for getfield, found int[]",
+            )),
         }
     }
 
     pub(super) fn array_length(&self, reference: ObjectRef) -> JayResult<usize> {
         match self.object(reference)?.kind {
             ObjectKind::ObjectArray { ref elements, .. } => Ok(elements.len()),
+            ObjectKind::IntArray { ref elements } => Ok(elements.len()),
             _ => Err(JayError::new(format!(
-                "expected object array reference, found {}",
+                "expected array reference, found {}",
                 self.type_name(reference)?
             ))),
         }
@@ -258,6 +282,48 @@ impl Heap {
         }
     }
 
+    pub(super) fn load_array_int(&self, reference: ObjectRef, index: usize) -> JayResult<i32> {
+        match self.object(reference)?.kind {
+            ObjectKind::IntArray { ref elements } => {
+                let Some(value) = elements.get(index) else {
+                    return Err(JayError::new(format!(
+                        "array index {index} out of bounds for length {}",
+                        elements.len()
+                    )));
+                };
+                Ok(*value)
+            }
+            _ => Err(JayError::new(format!(
+                "expected int array reference, found {}",
+                self.type_name(reference)?
+            ))),
+        }
+    }
+
+    pub(super) fn store_array_int(
+        &mut self,
+        reference: ObjectRef,
+        index: usize,
+        value: i32,
+    ) -> JayResult<()> {
+        match self.object_mut(reference)?.kind {
+            ObjectKind::IntArray { ref mut elements } => {
+                let length = elements.len();
+                let Some(slot) = elements.get_mut(index) else {
+                    return Err(JayError::new(format!(
+                        "array index {index} out of bounds for length {length}"
+                    )));
+                };
+                *slot = value;
+                Ok(())
+            }
+            _ => Err(JayError::new(format!(
+                "expected int array reference, found {}",
+                self.type_name(reference)?
+            ))),
+        }
+    }
+
     pub(super) fn should_collect(&self) -> bool {
         self.allocations_since_gc >= self.gc_threshold
     }
@@ -309,6 +375,7 @@ impl Heap {
                 ObjectKind::ObjectArray { ref elements, .. } => {
                     elements.iter().filter_map(Value::object_ref).collect()
                 }
+                ObjectKind::IntArray { .. } => Vec::new(),
             }
         };
 
@@ -439,6 +506,44 @@ mod tests {
             ))
         );
         assert_eq!(heap.type_name(array).unwrap(), "java.util.HashMap$Node[]");
+    }
+
+    #[test]
+    fn heap_int_arrays_store_length_and_values() {
+        let mut heap = Heap::new();
+        let array = heap.allocate_int_array(2);
+
+        assert_eq!(heap.array_length(array).unwrap(), 2);
+        assert_eq!(heap.load_array_int(array, 0).unwrap(), 0);
+
+        heap.store_array_int(array, 1, 42).unwrap();
+
+        assert_eq!(heap.load_array_int(array, 1).unwrap(), 42);
+        assert_eq!(
+            heap.value_type(array).unwrap(),
+            Some(ValueType::Reference("[I".to_string()))
+        );
+        assert_eq!(heap.type_name(array).unwrap(), "int[]");
+    }
+
+    #[test]
+    fn heap_rejects_out_of_bounds_int_array_access() {
+        let mut heap = Heap::new();
+        let array = heap.allocate_int_array(1);
+
+        let load_error = heap.load_array_int(array, 1).unwrap_err();
+        assert!(
+            load_error
+                .to_string()
+                .contains("array index 1 out of bounds for length 1")
+        );
+
+        let store_error = heap.store_array_int(array, 1, 99).unwrap_err();
+        assert!(
+            store_error
+                .to_string()
+                .contains("array index 1 out of bounds for length 1")
+        );
     }
 
     #[test]
