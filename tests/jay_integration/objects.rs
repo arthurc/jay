@@ -1151,6 +1151,45 @@ vehicle=Car
 }
 
 #[test]
+fn string_value_of_uses_identity_text_for_default_object_to_string() {
+    let root = temp_dir("string-value-of-default-object-tostring");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+class Plain {
+}
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(String.valueOf(new Object()));
+        System.out.println(String.valueOf(new Plain()));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    assert!(
+        lines
+            .next()
+            .is_some_and(|line| line.starts_with("java.lang.Object@"))
+    );
+    assert!(lines.next().is_some_and(|line| line.starts_with("Plain@")));
+    assert_eq!(lines.next(), None);
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn creates_multidimensional_reference_arrays_with_anewarray_component_descriptors() {
     let root = temp_dir("multidimensional-reference-arrays");
     compile_java(

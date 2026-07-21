@@ -117,9 +117,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return frame.pop_object_ref();
         }
         if receiver_class_name.starts_with('[') {
-            let identity = self.heap.object_identity(receiver)?;
-            let text = format!("{}@{identity:x}", receiver_class_name.replace('/', "."));
-            return Ok(self.heap.allocate_string(text));
+            return self.allocate_identity_to_string(receiver, &receiver_class_name);
         }
 
         let target_method_name = "toString".to_string();
@@ -165,6 +163,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
             ));
         }
 
+        if target_class_file.this_class == "java/lang/Object" {
+            return self.allocate_identity_to_string(receiver, &receiver_class_name);
+        }
+
         if target_method.access_flags & 0x0100 != 0 || target_method.access_flags & 0x0400 != 0 {
             return Err(JayError::new(
                 "String.valueOf(Object) toString target must not be native or abstract",
@@ -195,6 +197,17 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 "String.valueOf(Object) toString returned void",
             )),
         }
+    }
+
+    /// Allocates the VM-side fallback text used by default `Object.toString()`.
+    fn allocate_identity_to_string(
+        &mut self,
+        receiver: ObjectRef,
+        receiver_class_name: &str,
+    ) -> JayResult<ObjectRef> {
+        let identity = self.heap.object_identity(receiver)?;
+        let text = format!("{}@{identity:x}", receiver_class_name.replace('/', "."));
+        Ok(self.heap.allocate_string(text))
     }
 
     pub(super) fn invoke_pattern_matches(
