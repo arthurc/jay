@@ -31,19 +31,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
         index: u16,
     ) -> JayResult<()> {
         let class_name = class_file.constant_pool.class_name(index)?;
-        if class_name != "java/lang/Object" {
-            return Err(JayError::new(format!(
-                "unsupported anewarray component {}",
-                class_name.replace('/', ".")
-            )));
-        }
-
         let length = frame.pop_int()?;
         if length < 0 {
             return Err(JayError::new(format!("negative array length {length}")));
         }
 
-        let reference = self.heap.allocate_object_array(length as usize);
+        let descriptor = reference_array_descriptor(class_name);
+        let reference = self
+            .heap
+            .allocate_reference_array(descriptor, length as usize);
         frame.stack.push(Value::Reference(reference));
         self.collect_if_needed(frame);
         Ok(())
@@ -65,6 +61,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
 
         if let Ok(value) = constant_pool.integer(index) {
             frame.stack.push(Value::Int(value));
+            return Ok(());
+        }
+
+        if let Ok(value) = constant_pool.float(index) {
+            frame.stack.push(Value::Float(value));
             return Ok(());
         }
 
@@ -123,6 +124,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 }
                 (FieldType::Int, None) => {
                     frame.stack.push(Value::Int(0));
+                    Ok(())
+                }
+                (FieldType::Float, Some(Value::Float(value))) => {
+                    frame.stack.push(Value::Float(value));
+                    Ok(())
+                }
+                (FieldType::Float, None) => {
+                    frame.stack.push(Value::Float(0.0));
                     Ok(())
                 }
                 (FieldType::Long, Some(Value::Long(value))) => {
@@ -191,6 +200,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 frame.stack.push(Value::Int(0));
                 Ok(())
             }
+            (FieldType::Float, Some(Value::Float(value))) => {
+                frame.stack.push(Value::Float(value));
+                Ok(())
+            }
+            (FieldType::Float, None) => {
+                frame.stack.push(Value::Float(0.0));
+                Ok(())
+            }
             (FieldType::Long, Some(Value::Long(value))) => {
                 frame.stack.push(Value::Long(value));
                 Ok(())
@@ -231,5 +248,34 @@ impl<'a, W: Write> Interpreter<'a, W> {
             self.resolve_field_class(field.class_name, field.name, field.descriptor)?;
         let field_key = FieldKey::new(&declaring_class_name, field.name, field.descriptor);
         self.heap.put_instance_field(receiver, field_key, value)
+    }
+}
+
+fn reference_array_descriptor(component_type: &str) -> String {
+    if component_type.starts_with('[') {
+        format!("[{component_type}")
+    } else {
+        format!("[L{component_type};")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reference_array_descriptor;
+
+    #[test]
+    fn builds_reference_array_descriptor_for_class_components() {
+        assert_eq!(
+            reference_array_descriptor("java/lang/String"),
+            "[Ljava/lang/String;"
+        );
+    }
+
+    #[test]
+    fn builds_reference_array_descriptor_for_array_components() {
+        assert_eq!(
+            reference_array_descriptor("[Ljava/lang/String;"),
+            "[[Ljava/lang/String;"
+        );
     }
 }

@@ -17,7 +17,7 @@ public class Main {
     }
 
     static void inner() {
-        java.util.Map.Entry[] entries = new java.util.Map.Entry[1];
+        int[] entries = new int[1];
         System.out.println(entries.length);
     }
 }
@@ -34,7 +34,7 @@ public class Main {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("jay: unsupported anewarray component java.util.Map$Entry"),
+        stderr.contains("jay: unsupported bytecode 0xbc at pc 1"),
         "stderr missing base error:\n{stderr}"
     );
     assert!(

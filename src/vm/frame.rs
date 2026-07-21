@@ -49,10 +49,23 @@ impl Frame {
         Ok(())
     }
 
+    pub(super) fn load_float_local(&mut self, index: usize) -> JayResult<()> {
+        let value = self.local_float(index)?;
+        self.stack.push(Value::Float(value));
+        Ok(())
+    }
+
     pub(super) fn store_int_local(&mut self, index: usize) -> JayResult<()> {
         let value = self.pop_int()?;
         let slot = self.local_slot_mut(index)?;
         *slot = Value::Int(value);
+        Ok(())
+    }
+
+    pub(super) fn store_float_local(&mut self, index: usize) -> JayResult<()> {
+        let value = self.pop_float()?;
+        let slot = self.local_slot_mut(index)?;
+        *slot = Value::Float(value);
         Ok(())
     }
 
@@ -130,6 +143,18 @@ impl Frame {
             ))),
             other => Err(JayError::new(format!(
                 "expected int in local variable #{index}, found {other:?}"
+            ))),
+        }
+    }
+
+    fn local_float(&self, index: usize) -> JayResult<f32> {
+        match self.local_slot(index)? {
+            Value::Float(value) => Ok(*value),
+            Value::Uninitialized => Err(JayError::new(format!(
+                "local variable #{index} is uninitialized"
+            ))),
+            other => Err(JayError::new(format!(
+                "expected float in local variable #{index}, found {other:?}"
             ))),
         }
     }
@@ -218,6 +243,15 @@ impl Frame {
         }
     }
 
+    pub(super) fn pop_float(&mut self) -> JayResult<f32> {
+        match self.pop()? {
+            Value::Float(value) => Ok(value),
+            other => Err(JayError::new(format!(
+                "expected float on stack, found {other:?}"
+            ))),
+        }
+    }
+
     pub(super) fn pop_long(&mut self) -> JayResult<i64> {
         match self.pop()? {
             Value::Long(value) => Ok(value),
@@ -249,6 +283,7 @@ impl Frame {
     pub(super) fn pop_value_of_type(&mut self, value_type: &ValueType) -> JayResult<Value> {
         match value_type {
             ValueType::Int => Ok(Value::Int(self.pop_int()?)),
+            ValueType::Float => Ok(Value::Float(self.pop_float()?)),
             ValueType::Long => Ok(Value::Long(self.pop_long()?)),
             ValueType::Reference(_) => self.pop_reference(),
         }
@@ -257,6 +292,7 @@ impl Frame {
     pub(super) fn pop_field_value(&mut self, field_type: FieldType) -> JayResult<Value> {
         match field_type {
             FieldType::Int => Ok(Value::Int(self.pop_int()?)),
+            FieldType::Float => Ok(Value::Float(self.pop_float()?)),
             FieldType::Long => Ok(Value::Long(self.pop_long()?)),
             FieldType::Reference => self.pop_reference(),
         }
@@ -282,6 +318,7 @@ fn value_local_width(value: &Value) -> usize {
         Value::Uninitialized
         | Value::Null
         | Value::Int(_)
+        | Value::Float(_)
         | Value::Reference(_)
         | Value::PrintStream => 1,
     }
@@ -322,5 +359,16 @@ mod tests {
                 .to_string()
                 .contains("expected reference on stack, found Int(42)")
         );
+    }
+
+    #[test]
+    fn float_locals_round_trip_through_stack() {
+        let mut frame = Frame::new(1);
+        frame.stack.push(Value::Float(0.75));
+
+        frame.store_float_local(0).unwrap();
+        frame.load_float_local(0).unwrap();
+
+        assert_eq!(frame.pop_float().unwrap(), 0.75);
     }
 }

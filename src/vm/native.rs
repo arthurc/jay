@@ -125,6 +125,235 @@ pub(super) fn format_simple_date(
     }
 }
 
+/// Matches the small regex subset currently exercised by Jay integration
+/// tests without interpreting the full `java.util.regex.Pattern` JDK stack.
+pub(super) fn pattern_matches(pattern: &str, input: &str) -> JayResult<bool> {
+    let tokens = parse_pattern(pattern)?;
+    let characters = input.chars().collect::<Vec<_>>();
+    Ok(match_tokens(&tokens, &characters, 0, 0))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PatternToken {
+    atom: PatternAtom,
+    quantifier: Quantifier,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PatternAtom {
+    Literal(char),
+    Any,
+    Digit,
+    CharacterClass(Vec<(char, char)>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Quantifier {
+    One,
+    ZeroOrMore,
+    OneOrMore,
+    Exact(usize),
+}
+
+fn parse_pattern(pattern: &str) -> JayResult<Vec<PatternToken>> {
+    let mut tokens = Vec::new();
+    let characters = pattern.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    while index < characters.len() {
+        let atom = match characters[index] {
+            '.' => {
+                index += 1;
+                PatternAtom::Any
+            }
+            '\\' => {
+                let escaped = *characters.get(index + 1).ok_or_else(|| {
+                    JayError::new(format!(
+                        "unsupported regex pattern {pattern}: dangling escape"
+                    ))
+                })?;
+                index += 2;
+                match escaped {
+                    'd' => PatternAtom::Digit,
+                    character => PatternAtom::Literal(character),
+                }
+            }
+            '[' => {
+                let (ranges, next_index) = parse_character_class(&characters, index)?;
+                index = next_index;
+                PatternAtom::CharacterClass(ranges)
+            }
+            '*' | '+' => {
+                return Err(JayError::new(format!(
+                    "unsupported regex pattern {pattern}: dangling quantifier"
+                )));
+            }
+            character => {
+                index += 1;
+                PatternAtom::Literal(character)
+            }
+        };
+
+        let quantifier = if let Some(next) = characters.get(index) {
+            match next {
+                '*' => {
+                    index += 1;
+                    Quantifier::ZeroOrMore
+                }
+                '+' => {
+                    index += 1;
+                    Quantifier::OneOrMore
+                }
+                '{' => {
+                    let (count, next_index) = parse_exact_quantifier(&characters, index, pattern)?;
+                    index = next_index;
+                    Quantifier::Exact(count)
+                }
+                _ => Quantifier::One,
+            }
+        } else {
+            Quantifier::One
+        };
+        tokens.push(PatternToken { atom, quantifier });
+    }
+    Ok(tokens)
+}
+
+fn parse_exact_quantifier(
+    characters: &[char],
+    start: usize,
+    pattern: &str,
+) -> JayResult<(usize, usize)> {
+    let mut index = start + 1;
+    let mut digits = String::new();
+    while let Some(character) = characters.get(index) {
+        match character {
+            '0'..='9' => {
+                digits.push(*character);
+                index += 1;
+            }
+            '}' if !digits.is_empty() => {
+                let count = digits.parse::<usize>().map_err(|error| {
+                    JayError::new(format!(
+                        "unsupported regex pattern {pattern}: invalid repetition count {digits}: {error}"
+                    ))
+                })?;
+                return Ok((count, index + 1));
+            }
+            _ => break,
+        }
+    }
+
+    Err(JayError::new(format!(
+        "unsupported regex pattern {pattern}: invalid exact repetition"
+    )))
+}
+
+fn parse_character_class(
+    characters: &[char],
+    start: usize,
+) -> JayResult<(Vec<(char, char)>, usize)> {
+    let mut index = start + 1;
+    let mut ranges = Vec::new();
+    while index < characters.len() {
+        match characters[index] {
+            ']' if !ranges.is_empty() => return Ok((ranges, index + 1)),
+            '[' | ']' => {
+                return Err(JayError::new(
+                    "unsupported regex character class syntax".to_string(),
+                ));
+            }
+            character => {
+                if let Some('-') = characters.get(index + 1)
+                    && let Some(range_end) = characters.get(index + 2)
+                    && *range_end != ']'
+                {
+                    ranges.push((character, *range_end));
+                    index += 3;
+                    continue;
+                }
+
+                ranges.push((character, character));
+                index += 1;
+            }
+        }
+    }
+
+    Err(JayError::new(
+        "unsupported regex pattern: unterminated character class",
+    ))
+}
+
+fn match_tokens(
+    tokens: &[PatternToken],
+    input: &[char],
+    token_index: usize,
+    input_index: usize,
+) -> bool {
+    let Some(token) = tokens.get(token_index) else {
+        return input_index == input.len();
+    };
+
+    match token.quantifier {
+        Quantifier::One => {
+            let Some(character) = input.get(input_index) else {
+                return false;
+            };
+            token.atom.matches(*character)
+                && match_tokens(tokens, input, token_index + 1, input_index + 1)
+        }
+        Quantifier::ZeroOrMore => {
+            let max_consumed = consecutive_match_count(&token.atom, input, input_index);
+            for consumed in (0..=max_consumed).rev() {
+                if match_tokens(tokens, input, token_index + 1, input_index + consumed) {
+                    return true;
+                }
+            }
+            false
+        }
+        Quantifier::OneOrMore => {
+            let max_consumed = consecutive_match_count(&token.atom, input, input_index);
+            if max_consumed == 0 {
+                return false;
+            }
+            for consumed in (1..=max_consumed).rev() {
+                if match_tokens(tokens, input, token_index + 1, input_index + consumed) {
+                    return true;
+                }
+            }
+            false
+        }
+        Quantifier::Exact(count) => {
+            let max_consumed = consecutive_match_count(&token.atom, input, input_index);
+            max_consumed >= count
+                && match_tokens(tokens, input, token_index + 1, input_index + count)
+        }
+    }
+}
+
+fn consecutive_match_count(atom: &PatternAtom, input: &[char], start: usize) -> usize {
+    let mut index = start;
+    while let Some(character) = input.get(index) {
+        if !atom.matches(*character) {
+            break;
+        }
+        index += 1;
+    }
+    index - start
+}
+
+impl PatternAtom {
+    fn matches(&self, character: char) -> bool {
+        match self {
+            PatternAtom::Literal(expected) => *expected == character,
+            PatternAtom::Any => true,
+            PatternAtom::Digit => character.is_ascii_digit(),
+            PatternAtom::CharacterClass(ranges) => ranges
+                .iter()
+                .any(|(start, end)| *start <= character && character <= *end),
+        }
+    }
+}
+
 fn utc_date_time(epoch_millis: i64) -> UtcDateTime {
     let days = epoch_millis.div_euclid(MILLIS_PER_DAY);
     let millis_of_day = epoch_millis.rem_euclid(MILLIS_PER_DAY);
@@ -220,6 +449,31 @@ mod tests {
         assert_eq!(
             format_simple_date("dd/MM/yyyy  HH:mm:ss z", 0, TimeZone::from_id("unknown")).unwrap(),
             "01/01/1970  00:00:00 GMT"
+        );
+    }
+
+    #[test]
+    fn matches_wildcards_and_character_classes() {
+        assert!(pattern_matches("geeks.*", "geeksforgeeks").unwrap());
+        assert!(!pattern_matches("geeks[0-9]+", "geeks12s").unwrap());
+        assert!(pattern_matches("geeks[0-9]+", "geeks12").unwrap());
+    }
+
+    #[test]
+    fn matches_digit_escape_with_exact_repetition() {
+        assert!(pattern_matches(r"\d{4}", "1234").unwrap());
+        assert!(!pattern_matches(r"\d{4}", "123").unwrap());
+        assert!(!pattern_matches(r"\d{4}", "12a4").unwrap());
+    }
+
+    #[test]
+    fn rejects_unsupported_character_class_syntax() {
+        let error = pattern_matches("[", "value").unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported regex pattern: unterminated character class")
         );
     }
 }

@@ -141,6 +141,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 let index = read_u1(&code.bytes, pc)? as usize;
                 frame.load_int_local(index)?;
             }
+            0x17 => {
+                let index = read_u1(&code.bytes, pc)? as usize;
+                frame.load_float_local(index)?;
+            }
             0x16 => {
                 let index = read_u1(&code.bytes, pc)? as usize;
                 frame.load_long_local(index)?;
@@ -150,11 +154,16 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 frame.load_reference_local(index)?;
             }
             0x1a..=0x1d => frame.load_int_local((opcode - 0x1a) as usize)?,
+            0x22..=0x25 => frame.load_float_local((opcode - 0x22) as usize)?,
             0x1e..=0x21 => frame.load_long_local((opcode - 0x1e) as usize)?,
             0x2a..=0x2d => frame.load_reference_local((opcode - 0x2a) as usize)?,
             0x36 => {
                 let index = read_u1(&code.bytes, pc)? as usize;
                 frame.store_int_local(index)?;
+            }
+            0x38 => {
+                let index = read_u1(&code.bytes, pc)? as usize;
+                frame.store_float_local(index)?;
             }
             0x37 => {
                 let index = read_u1(&code.bytes, pc)? as usize;
@@ -165,6 +174,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 frame.store_reference_local(index)?;
             }
             0x3b..=0x3e => frame.store_int_local((opcode - 0x3b) as usize)?,
+            0x43..=0x46 => frame.store_float_local((opcode - 0x43) as usize)?,
             0x3f..=0x42 => frame.store_long_local((opcode - 0x3f) as usize)?,
             0x4b..=0x4e => frame.store_reference_local((opcode - 0x4b) as usize)?,
             0x57 => {
@@ -188,6 +198,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 let left = frame.pop_int()?;
                 frame.stack.push(Value::Int(left.wrapping_mul(right)));
             }
+            0x6a => {
+                let right = frame.pop_float()?;
+                let left = frame.pop_float()?;
+                frame.stack.push(Value::Float(left * right));
+            }
             0x6c => {
                 let right = frame.pop_int()?;
                 let left = frame.pop_int()?;
@@ -195,6 +210,43 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     return Err(JayError::new("integer division by zero"));
                 }
                 frame.stack.push(Value::Int(left.wrapping_div(right)));
+            }
+            0x7c => {
+                let right = frame.pop_int()? as u32;
+                let left = frame.pop_int()? as u32;
+                frame
+                    .stack
+                    .push(Value::Int((left >> (right & 0x1f)) as i32));
+            }
+            0x7e => {
+                let right = frame.pop_int()?;
+                let left = frame.pop_int()?;
+                frame.stack.push(Value::Int(left & right));
+            }
+            0x82 => {
+                let right = frame.pop_int()?;
+                let left = frame.pop_int()?;
+                frame.stack.push(Value::Int(left ^ right));
+            }
+            0x86 => {
+                let value = frame.pop_int()?;
+                frame.stack.push(Value::Float(value as f32));
+            }
+            0x8b => {
+                let value = frame.pop_float()?;
+                frame.stack.push(Value::Int(value as i32));
+            }
+            0x96 => {
+                let right = frame.pop_float()?;
+                let left = frame.pop_float()?;
+                let result = if left.is_nan() || right.is_nan() || left > right {
+                    1
+                } else if left == right {
+                    0
+                } else {
+                    -1
+                };
+                frame.stack.push(Value::Int(result));
             }
             0x84 => {
                 let index = read_u1(&code.bytes, pc)? as usize;
@@ -329,6 +381,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 let value = frame.pop_reference()?;
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
+                self.validate_reference_array_store(reference, &value)?;
                 self.heap
                     .store_array_reference(reference, checked_array_index(index)?, value)?;
             }
@@ -340,4 +393,57 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
         Ok(InstructionResult::Continue)
     }
+}
+
+impl<'a, W: Write> Interpreter<'a, W> {
+    fn validate_reference_array_store(&self, array: ObjectRef, value: &Value) -> JayResult<()> {
+        let Value::Reference(stored_reference) = value else {
+            return Ok(());
+        };
+
+        let actual = match self.heap.value_type(*stored_reference)? {
+            Some(super::descriptors::ValueType::Reference(reference_type)) => reference_type,
+            Some(other) => {
+                return Err(JayError::new(format!(
+                    "array store value had unexpected type {}",
+                    other.name()
+                )));
+            }
+            None => return Err(JayError::new("array store value type is unavailable")),
+        };
+
+        let descriptor = self.heap.array_descriptor(array)?.to_string();
+        let Some(expected_component) = descriptor.strip_prefix('[') else {
+            return Err(JayError::new(format!(
+                "malformed reference array descriptor {descriptor}"
+            )));
+        };
+        let expected = expected_component
+            .strip_prefix('L')
+            .and_then(|component| component.strip_suffix(';'))
+            .unwrap_or(expected_component);
+
+        let compatible = if actual.starts_with('[') != expected.starts_with('[') {
+            expected == "java/lang/Object"
+        } else {
+            self.is_assignable_reference(&actual, expected)?
+        };
+        if compatible {
+            return Ok(());
+        }
+
+        Err(JayError::new(format!(
+            "cannot store {} in {}",
+            self.heap.type_name(*stored_reference)?,
+            reference_array_name(&descriptor)
+        )))
+    }
+}
+
+fn reference_array_name(descriptor: &str) -> String {
+    descriptor
+        .strip_prefix("[L")
+        .and_then(|descriptor| descriptor.strip_suffix(';'))
+        .map(|class_name| format!("{}[]", class_name.replace('/', ".")))
+        .unwrap_or_else(|| descriptor.replace('/', "."))
 }
