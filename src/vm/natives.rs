@@ -20,6 +20,8 @@ use super::mirrors::{MirrorKind, descriptor_for_primitive_name};
 use super::value::Value;
 use crate::{JayError, JayResult};
 
+mod unsafe_memory;
+
 impl<'a, W: Write> Interpreter<'a, W> {
     /// Runs the native method `class_name.name descriptor`.
     ///
@@ -33,6 +35,16 @@ impl<'a, W: Write> Interpreter<'a, W> {
         receiver: Option<ObjectRef>,
         arguments: &[Value],
     ) -> JayResult<()> {
+        if class_name == "jdk/internal/misc/Unsafe"
+            && let Some(result) = self.try_invoke_unsafe_native(name, descriptor, arguments)?
+        {
+            if let Some(value) = result {
+                frame.stack.push(value);
+                self.collect_if_needed(frame);
+            }
+            return Ok(());
+        }
+
         let result = match (class_name, name, descriptor) {
             // HotSpot uses these to register VM natives; Jay dispatches
             // natives through this table, so there is nothing to populate.

@@ -156,3 +156,42 @@ public class Main {
         "int\ntrue\ntrue\ntrue\n[I\ntrue\ntrue\njava.lang.String\ntrue\ntrue\nfalse\nfalse\nfalse\ntrue\nb\n5\n4\n"
     );
 }
+
+#[test]
+fn unsafe_backed_array_comparisons_run_the_jdk_vectorized_paths() {
+    let stdout = run_main(
+        "unsafe-arrays-support",
+        r#"
+public class Main {
+    static byte[] left = ascii("the quick brown fox jumps");
+    static byte[] right = ascii("the quick brown fox jumped");
+    static int[] ints = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    static int[] intsChanged = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 99, 12};
+    static long[] longs = {1L, 2L, 3L};
+    static char[] chars = "abcdefghijklmnop".toCharArray();
+    static char[] charsChanged = "abcdefghijklmnoq".toCharArray();
+
+    static byte[] ascii(String text) {
+        byte[] bytes = new byte[text.length()];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) text.charAt(i);
+        }
+        return bytes;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(java.util.Arrays.mismatch(left, right));
+        System.out.println(java.util.Arrays.equals(left, java.util.Arrays.copyOf(left, left.length)));
+        System.out.println(java.util.Arrays.mismatch(ints, intsChanged));
+        System.out.println(java.util.Arrays.equals(ints, ints.clone()));
+        System.out.println(java.util.Arrays.mismatch(longs, new long[] {1L, 2L, 4L}));
+        System.out.println(java.util.Arrays.mismatch(chars, charsChanged));
+        System.out.println(java.util.Arrays.equals(chars, chars.clone()));
+        System.out.println(java.util.Arrays.hashCode(ints));
+    }
+}
+"#,
+    );
+
+    assert_eq!(stdout, "24\ntrue\n10\ntrue\n2\n15\ntrue\n-1625404601\n");
+}

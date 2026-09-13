@@ -7,6 +7,7 @@ use super::value::Value;
 use crate::{JayError, JayResult};
 
 mod arrays;
+mod memory;
 
 pub(super) use arrays::ArrayKind;
 
