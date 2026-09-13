@@ -45,7 +45,7 @@ cargo run -- -cp /tmp/jay-demo/classes HelloWorld
 The CLI shape is:
 
 ```text
-jay -cp <directory> <fully.qualified.MainClass>
+jay -cp <directory> <fully.qualified.MainClass> [args...]
 ```
 
 For packaged classes, pass the fully qualified class name:
@@ -54,13 +54,19 @@ For packaged classes, pass the fully qualified class name:
 cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 ```
 
+Anything after the main class is passed to `main(String[] args)` verbatim:
+
+```sh
+cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
+```
+
 ## Current Capabilities
 
 `jay` currently supports:
 
 - Directory classpaths for application classes
 - JDK boot class lookup through `JAVA_HOME/lib/modules`
-- `public static void main(String[] args)` and `public static void main()`
+- `public static void main(String[] args)` and `public static void main()`, with `args` populated from the command line
 - `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, and focused `System.out.println(Object)` support for `null`, `String`, `Date`, and Jay-created `LocalDateTime`
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Limited heap-allocated reference arrays with allocation, length, load, and store bytecodes, including typed JDK arrays such as `HashMap$Node[]`
