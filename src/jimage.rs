@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Read;
+use std::ops::RangeInclusive;
 use std::path::Path;
 
 use flate2::read::ZlibDecoder;
@@ -8,10 +9,12 @@ use crate::{JayError, JayResult};
 
 const IMAGE_MAGIC: u32 = 0xCAFEDADA;
 const MAJOR_VERSION: u32 = 1;
-const MINOR_VERSION: u32 = 0;
+/// JImage minor versions this reader understands: 1.0 (the original layout) and
+/// 1.1 (newer JDKs such as 27, which adds preview-mode resources and flags).
+const SUPPORTED_MINOR_VERSIONS: RangeInclusive<u32> = 0..=1;
 const HEADER_SIZE: usize = 28;
 const HASH_MULTIPLIER: u32 = 0x0100_0193;
-const ATTRIBUTE_COUNT: usize = 8;
+const ATTRIBUTE_COUNT: usize = 9;
 const ATTRIBUTE_MODULE: usize = 1;
 const ATTRIBUTE_PARENT: usize = 2;
 const ATTRIBUTE_BASE: usize = 3;
@@ -19,6 +22,11 @@ const ATTRIBUTE_EXTENSION: usize = 4;
 const ATTRIBUTE_OFFSET: usize = 5;
 const ATTRIBUTE_COMPRESSED: usize = 6;
 const ATTRIBUTE_UNCOMPRESSED: usize = 7;
+/// Preview-mode flags introduced by JImage 1.1.
+const ATTRIBUTE_PREVIEW_FLAGS: usize = 8;
+/// Set on `/<module>/META-INF/preview/...` locations, which hold the
+/// `--enable-preview` variants of classes. Jay only serves non-preview classes.
+const FLAGS_IS_PREVIEW_VERSION: u64 = 0x2;
 const RESOURCE_HEADER_MAGIC: u32 = 0xCAFEFAFA;
 const RESOURCE_HEADER_SIZE: usize = 29;
 const DECOMPRESSOR_ZIP: &str = "zip";
@@ -115,7 +123,7 @@ impl JImage {
         let version = endian.read_u32(&bytes[4..8]);
         let major_version = version >> 16;
         let minor_version = version & 0xffff;
-        if major_version != MAJOR_VERSION || minor_version != MINOR_VERSION {
+        if major_version != MAJOR_VERSION || !SUPPORTED_MINOR_VERSIONS.contains(&minor_version) {
             return Err(JayError::new(format!(
                 "unsupported JImage version {major_version}.{minor_version}"
             )));
@@ -405,6 +413,9 @@ impl JImage {
             };
             let entry = self.entry_name(&location)?;
             if entry.module == "modules" || entry.module == "packages" {
+                continue;
+            }
+            if location.attributes[ATTRIBUTE_PREVIEW_FLAGS] & FLAGS_IS_PREVIEW_VERSION != 0 {
                 continue;
             }
             let Some(class_name) = entry.resource_name.strip_suffix(".class") else {
@@ -727,8 +738,8 @@ mod tests {
     fn parses_default_jdk_jimage_header() {
         let image = JImage::open(default_boot_image_path().unwrap()).unwrap();
 
-        assert_eq!(image.header().major_version, 1);
-        assert_eq!(image.header().minor_version, 0);
+        assert_eq!(image.header().major_version, MAJOR_VERSION);
+        assert!(SUPPORTED_MINOR_VERSIONS.contains(&image.header().minor_version));
         assert_eq!(image.header().flags, 0);
         assert!(image.header().resource_count > 0);
         assert!(image.header().table_length > 0);
@@ -768,6 +779,18 @@ mod tests {
         let bytes = image.load_class_bytes("java.lang.Object").unwrap().unwrap();
 
         assert_eq!(&bytes[..4], &[0xCA, 0xFE, 0xBA, 0xBE]);
+    }
+
+    #[test]
+    fn default_jdk_class_index_excludes_preview_classes() {
+        let image = JImage::open(default_boot_image_path().unwrap()).unwrap();
+
+        assert!(
+            image
+                .class_index
+                .keys()
+                .all(|name| !name.starts_with("META-INF.preview."))
+        );
     }
 
     #[test]
@@ -883,6 +906,77 @@ mod tests {
     }
 
     #[test]
+    fn accepts_jimage_version_1_1() {
+        let mut bytes = synthetic_image(0, &[], b"\0", &[]);
+        bytes[4..8].copy_from_slice(&0x0001_0001u32.to_le_bytes());
+
+        let image = JImage::parse(bytes).unwrap();
+
+        assert_eq!(image.header().major_version, 1);
+        assert_eq!(image.header().minor_version, 1);
+    }
+
+    #[test]
+    fn rejects_unknown_jimage_minor_version() {
+        let mut bytes = synthetic_image(0, &[], b"\0", &[]);
+        bytes[4..8].copy_from_slice(&0x0001_0002u32.to_le_bytes());
+
+        let error = JImage::parse(bytes).unwrap_err();
+
+        assert!(error.to_string().contains("unsupported JImage version 1.2"));
+    }
+
+    #[test]
+    fn parses_preview_flags_location_attribute() {
+        let location_stream = [
+            location_attribute(ATTRIBUTE_PREVIEW_FLAGS, 1),
+            location_attribute(ATTRIBUTE_UNCOMPRESSED, 4),
+            vec![0],
+        ]
+        .concat();
+        let image = JImage::parse(synthetic_image(0, &location_stream, b"\0", &[])).unwrap();
+
+        let location = image.location_at_offset(0).unwrap();
+
+        assert_eq!(location.attributes[ATTRIBUTE_PREVIEW_FLAGS], 1);
+        assert_eq!(location.attributes[ATTRIBUTE_UNCOMPRESSED], 4);
+    }
+
+    #[test]
+    fn class_index_skips_preview_resources() {
+        let strings = strings_table([
+            "java.base",
+            "java/lang",
+            "META-INF/preview/java/lang",
+            "Foo",
+            "class",
+        ]);
+        let normal = class_location(&strings, "java/lang", 0);
+        let preview = class_location(
+            &strings,
+            "META-INF/preview/java/lang",
+            FLAGS_IS_PREVIEW_VERSION,
+        );
+        // Location offset 0 marks an empty table slot, so pad the stream by one byte.
+        let location_stream = [vec![0], normal.clone(), preview].concat();
+        let offsets = [1, 1 + normal.len() as u32];
+
+        let image = JImage::parse(synthetic_image_with_offsets(
+            &offsets,
+            &location_stream,
+            &strings,
+            &[],
+        ))
+        .unwrap();
+
+        assert_eq!(
+            image.class_index.keys().collect::<Vec<_>>(),
+            ["java.lang.Foo"]
+        );
+        assert_eq!(image.class_index["java.lang.Foo"].len(), 1);
+    }
+
+    #[test]
     fn rejects_truncated_jimage_index() {
         let mut bytes = header(1, 0, 1);
         bytes.extend(0i32.to_le_bytes());
@@ -984,17 +1078,45 @@ mod tests {
         strings: &[u8],
         resources: &[u8],
     ) -> Vec<u8> {
+        let offsets = vec![0u32; table_length as usize];
+        synthetic_image_with_offsets(&offsets, locations, strings, resources)
+    }
+
+    /// Builds an image whose location offset table points at entries in
+    /// `locations`, so index-building code sees real resources.
+    fn synthetic_image_with_offsets(
+        offsets: &[u32],
+        locations: &[u8],
+        strings: &[u8],
+        resources: &[u8],
+    ) -> Vec<u8> {
+        let table_length = offsets.len() as u32;
         let mut bytes = header(table_length, locations.len() as u32, strings.len() as u32);
         for _ in 0..table_length {
             bytes.extend(0i32.to_le_bytes());
         }
-        for _ in 0..table_length {
-            bytes.extend(0u32.to_le_bytes());
+        for offset in offsets {
+            bytes.extend(offset.to_le_bytes());
         }
         bytes.extend(locations);
         bytes.extend(strings);
         bytes.extend(resources);
         bytes
+    }
+
+    /// Encodes a `java.base` location for `<parent>/Foo.class` with the given
+    /// preview flags.
+    fn class_location(strings: &[u8], parent: &str, preview_flags: u64) -> Vec<u8> {
+        [
+            location_attribute(ATTRIBUTE_MODULE, string_offset(strings, "java.base") as u64),
+            location_attribute(ATTRIBUTE_PARENT, string_offset(strings, parent) as u64),
+            location_attribute(ATTRIBUTE_BASE, string_offset(strings, "Foo") as u64),
+            location_attribute(ATTRIBUTE_EXTENSION, string_offset(strings, "class") as u64),
+            location_attribute(ATTRIBUTE_UNCOMPRESSED, 4),
+            location_attribute(ATTRIBUTE_PREVIEW_FLAGS, preview_flags),
+            vec![0],
+        ]
+        .concat()
     }
 
     fn header(table_length: u32, locations_size: u32, strings_size: u32) -> Vec<u8> {
