@@ -24,3 +24,6 @@ mod errors;
 
 #[path = "jay_integration/program_args.rs"]
 mod program_args;
+
+#[path = "jay_integration/control_flow.rs"]
+mod control_flow;

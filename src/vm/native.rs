@@ -394,9 +394,55 @@ fn two_digits(value: u8) -> String {
     format!("{value:02}")
 }
 
+/// Formats a Java `char` (UTF-16 code unit as an `int`) the way `println(char)` does.
+///
+/// Unpaired surrogates cannot be represented in Rust strings and are printed
+/// as U+FFFD, matching the replacement most terminals show.
+pub(super) fn char_to_string(value: i32) -> String {
+    char::from_u32(value as u16 as u32)
+        .unwrap_or(char::REPLACEMENT_CHARACTER)
+        .to_string()
+}
+
+/// Formats a `float` following `Float.toString` for the common cases.
+///
+/// Whole numbers print with a trailing `.0`; other values use Rust's shortest
+/// round-trip representation, which matches Java for values in the range
+/// `10^-3 <= |value| < 10^7`. NaN and infinities use Java spellings.
+pub(super) fn float_to_string(value: f32) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    if value == value.trunc() && value.abs() < 1.0e7 {
+        return format!("{value:.1}");
+    }
+    value.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn char_to_string_formats_code_units() {
+        assert_eq!(char_to_string(65), "A");
+        assert_eq!(char_to_string(0x00e9), "é");
+        assert_eq!(char_to_string(0xd800), "\u{fffd}");
+    }
+
+    #[test]
+    fn float_to_string_matches_java_common_cases() {
+        assert_eq!(float_to_string(2.0), "2.0");
+        assert_eq!(float_to_string(-0.0), "-0.0");
+        assert_eq!(float_to_string(1.5), "1.5");
+        assert_eq!(float_to_string(0.1), "0.1");
+        assert_eq!(float_to_string(f32::NAN), "NaN");
+        assert_eq!(float_to_string(f32::INFINITY), "Infinity");
+        assert_eq!(float_to_string(f32::NEG_INFINITY), "-Infinity");
+    }
 
     #[test]
     fn formats_epoch_date_to_jdk_style_gmt_string() {

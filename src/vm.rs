@@ -1,3 +1,4 @@
+mod arithmetic;
 mod bytecode;
 mod descriptors;
 mod fields;

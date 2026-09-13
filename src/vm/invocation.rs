@@ -5,6 +5,7 @@ use std::io::Write;
 use super::descriptors::{MethodDescriptor, ReturnType, ValueType};
 use super::frame::Frame;
 use super::interpreter::Interpreter;
+use super::native::{char_to_string, float_to_string};
 use super::native_runtime::current_time_millis;
 use super::runtime::apply_string_concat_recipe;
 use super::value::Value;
@@ -51,6 +52,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let value = frame.pop_int()?;
                     frame.pop_print_stream()?;
                     let text = if value == 0 { "false" } else { "true" };
+                    writeln!(self.output, "{text}")?;
+                    Ok(())
+                }
+                "(C)V" => {
+                    let value = frame.pop_int()?;
+                    frame.pop_print_stream()?;
+                    let text = char_to_string(value);
+                    writeln!(self.output, "{text}")?;
+                    Ok(())
+                }
+                "(F)V" => {
+                    let value = frame.pop_float()?;
+                    frame.pop_print_stream()?;
+                    let text = float_to_string(value);
                     writeln!(self.output, "{text}")?;
                     Ok(())
                 }
