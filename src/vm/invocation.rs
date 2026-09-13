@@ -132,15 +132,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             return self.invoke_date_to_string(frame, receiver);
         }
-        if target_method_name == "hashCode"
-            && target_descriptor == "()I"
-            && receiver_class_name == "java/lang/String"
+        if receiver_class_name == "java/lang/String"
+            && self.try_invoke_string_method(
+                frame,
+                &target_method_name,
+                &target_descriptor,
+                receiver,
+                &arguments,
+            )?
         {
-            let value = self.heap.string(receiver)?;
-            let hash = value.encode_utf16().fold(0i32, |hash, unit| {
-                hash.wrapping_mul(31).wrapping_add(unit as i32)
-            });
-            frame.stack.push(Value::Int(hash));
             return Ok(());
         }
         if target_method_name == "format"
@@ -263,6 +263,12 @@ impl<'a, W: Write> Interpreter<'a, W> {
             && target_descriptor == "(Ljava/lang/String;)V"
         {
             return self.invoke_simple_date_format_constructor(caller, &descriptor, &target_name);
+        }
+
+        if target_class_name == "java/lang/String"
+            && self.try_invoke_string_constructor(caller, &target_descriptor)?
+        {
+            return Ok(());
         }
 
         let target_class_file = self.load_class_file(&target_class_name)?;
@@ -540,6 +546,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
             && target_descriptor == "()Ljava/time/LocalDateTime;"
         {
             return self.invoke_local_date_time_now(caller);
+        }
+        if self.try_invoke_string_static(
+            caller,
+            &target_class_name,
+            &target_method_name,
+            &target_descriptor,
+        )? {
+            return Ok(());
         }
 
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;

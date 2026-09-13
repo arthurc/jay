@@ -30,3 +30,6 @@ mod control_flow;
 
 #[path = "jay_integration/arrays.rs"]
 mod arrays;
+
+#[path = "jay_integration/strings.rs"]
+mod strings;

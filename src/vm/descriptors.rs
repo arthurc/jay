@@ -100,7 +100,7 @@ fn parse_complete_value_type(input: &str, descriptor: &str) -> JayResult<ValueTy
 }
 
 pub(super) fn parse_field_descriptor(descriptor: &str) -> JayResult<FieldType> {
-    if descriptor == "I" || descriptor == "Z" {
+    if matches!(descriptor, "I" | "Z" | "B" | "C" | "S") {
         return Ok(FieldType::Int);
     }
 
@@ -136,7 +136,7 @@ fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueTyp
         return Ok((ValueType::Int, remaining));
     }
 
-    if let Some(remaining) = input.strip_prefix('Z') {
+    if let Some(remaining) = input.strip_prefix(['Z', 'B', 'C', 'S']) {
         return Ok((ValueType::Int, remaining));
     }
 
@@ -222,6 +222,9 @@ mod tests {
     fn parses_supported_field_descriptors() {
         assert_eq!(parse_field_descriptor("I").unwrap(), FieldType::Int);
         assert_eq!(parse_field_descriptor("Z").unwrap(), FieldType::Int);
+        assert_eq!(parse_field_descriptor("B").unwrap(), FieldType::Int);
+        assert_eq!(parse_field_descriptor("C").unwrap(), FieldType::Int);
+        assert_eq!(parse_field_descriptor("S").unwrap(), FieldType::Int);
         assert_eq!(parse_field_descriptor("F").unwrap(), FieldType::Float);
         assert_eq!(parse_field_descriptor("J").unwrap(), FieldType::Long);
         assert_eq!(
@@ -304,6 +307,14 @@ mod tests {
         let descriptor = MethodDescriptor::parse("(Z)Z").unwrap();
 
         assert_eq!(descriptor.parameter_types, vec![ValueType::Int]);
+        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Int));
+
+        let descriptor = MethodDescriptor::parse("(BCS)C").unwrap();
+
+        assert_eq!(
+            descriptor.parameter_types,
+            vec![ValueType::Int, ValueType::Int, ValueType::Int]
+        );
         assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Int));
     }
 

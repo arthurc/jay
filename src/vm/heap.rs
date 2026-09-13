@@ -264,6 +264,47 @@ impl Heap {
         )))
     }
 
+    /// Allocates a `char[]` holding the given UTF-16 code units.
+    pub(super) fn allocate_char_array(&mut self, units: &[u16]) -> ObjectRef {
+        self.allocate(ObjectKind::PrimitiveArray(PrimitiveArray::Char(
+            units.to_vec(),
+        )))
+    }
+
+    /// Reads the UTF-16 code units of a `char[]`.
+    pub(super) fn char_array_units(&self, reference: ObjectRef) -> JayResult<&[u16]> {
+        match self.object(reference)?.kind {
+            ObjectKind::PrimitiveArray(PrimitiveArray::Char(ref units)) => Ok(units),
+            _ => Err(JayError::new(format!(
+                "expected char[] reference, found {}",
+                self.type_name(reference)?
+            ))),
+        }
+    }
+
+    /// Turns a freshly allocated `java.lang.String` instance into a native string.
+    ///
+    /// `new` allocates an empty instance before the constructor runs; the
+    /// constructor shim swaps the object kind in place so existing references
+    /// to the slot see the string value.
+    pub(super) fn replace_with_string(
+        &mut self,
+        reference: ObjectRef,
+        value: impl Into<String>,
+    ) -> JayResult<()> {
+        let object = self.object_mut(reference)?;
+        match object.kind {
+            ObjectKind::Instance { ref class_name, .. } if class_name == "java/lang/String" => {
+                object.kind = ObjectKind::String(value.into());
+                Ok(())
+            }
+            _ => Err(JayError::new(format!(
+                "expected uninitialized String instance, found {}",
+                self.type_name(reference)?
+            ))),
+        }
+    }
+
     fn allocate(&mut self, kind: ObjectKind) -> ObjectRef {
         let object = HeapObject {
             marked: false,
