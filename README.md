@@ -11,11 +11,14 @@ file parsing, JImage lookup, and a minimal interpreter loop.
 ## Requirements
 
 - Rust with Cargo
-- A JDK with `lib/modules`
+- A JDK with `lib/modules` (JImage format 1.0 or 1.1, so JDK 9 through JDK 27
+  boot images are readable; preview-mode class variants in 1.1 images are
+  ignored)
 - `JAVA_HOME` set to that JDK
 
 The integration tests compile Java sources with `javac --release 21`, so a JDK
-that supports Java 21 is expected for the full test suite.
+that supports Java 21 is expected for the full test suite. The suite is
+exercised against both JDK 21 (CI) and JDK 27.
 
 ## Usage
 
@@ -86,7 +89,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Focused `Pattern.matches(String, CharSequence)` support for the regex constructs exercised by the integration tests, including `.`, `*`, `+`, exact repetition like `{4}`, digit escapes like `\d`, and simple character classes such as `[0-9]`
 - Focused date/time shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `LocalDateTime.now()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
-- Class files up to the parser's supported class file version range
+- Class files with major versions 45 through 71 (Java 1.1 through Java 27)
 
 Primitive arrays, string interning, full collection semantics, general
 invokedynamic bootstrap execution, long arithmetic, broad date formatting,

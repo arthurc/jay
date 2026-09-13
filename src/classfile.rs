@@ -1,8 +1,8 @@
 use crate::{JayError, JayResult};
 
 const MIN_SUPPORTED_MAJOR_VERSION: u16 = 45;
-const MAX_SUPPORTED_MAJOR_VERSION: u16 = 69;
-const MAX_SUPPORTED_JAVA_VERSION: u16 = 25;
+const MAX_SUPPORTED_MAJOR_VERSION: u16 = 71;
+const MAX_SUPPORTED_JAVA_VERSION: u16 = 27;
 
 #[derive(Debug, Clone)]
 pub struct ClassFile {
@@ -661,6 +661,51 @@ mod tests {
         let class_file = ClassFile::parse(&bytes).unwrap();
 
         assert_eq!(class_file.major_version, 69);
+    }
+
+    #[test]
+    fn accepts_java_27_class_file_major_version() {
+        let bytes = empty_class_with_major_version(71);
+
+        let class_file = ClassFile::parse(&bytes).unwrap();
+
+        assert_eq!(class_file.major_version, 71);
+    }
+
+    #[test]
+    fn rejects_class_file_major_versions_newer_than_java_27() {
+        let bytes = empty_class_with_major_version(72);
+
+        let error = ClassFile::parse(&bytes).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported class file major version 72; expected Java 27 or older")
+        );
+    }
+
+    /// Minimal `Empty extends Object` class file bytes with the given major version.
+    fn empty_class_with_major_version(major_version: u16) -> Vec<u8> {
+        let [major_high, major_low] = major_version.to_be_bytes();
+        vec![
+            0xCA, 0xFE, 0xBA, 0xBE, // magic
+            0x00, 0x00, // minor
+            major_high, major_low, // major
+            0x00, 0x05, // constant_pool_count
+            0x07, 0x00, 0x02, // #1 Class #2
+            0x01, 0x00, 0x05, b'E', b'm', b'p', b't', b'y', // #2 Utf8 Empty
+            0x07, 0x00, 0x04, // #3 Class #4
+            0x01, 0x00, 0x10, b'j', b'a', b'v', b'a', b'/', b'l', b'a', b'n', b'g', b'/', b'O',
+            b'b', b'j', b'e', b'c', b't', // #4 Utf8 java/lang/Object
+            0x00, 0x21, // access_flags
+            0x00, 0x01, // this_class
+            0x00, 0x03, // super_class
+            0x00, 0x00, // interfaces_count
+            0x00, 0x00, // fields_count
+            0x00, 0x00, // methods_count
+            0x00, 0x00, // attributes_count
+        ]
     }
 
     #[test]
