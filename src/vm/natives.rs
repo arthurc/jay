@@ -57,6 +57,22 @@ impl<'a, W: Write> Interpreter<'a, W> {
             ("java/lang/Object", "clone", "()Ljava/lang/Object;") => Some(Value::Reference(
                 self.object_clone(instance_receiver(receiver)?)?,
             )),
+            // Identity hashes are heap slot indexes: stable for an object's
+            // lifetime and cheap, which is all the JDK relies on.
+            ("java/lang/Object", "hashCode", "()I") => Some(Value::Int(
+                self.heap.object_identity(instance_receiver(receiver)?)? as i32,
+            )),
+            ("java/lang/System", "identityHashCode", "(Ljava/lang/Object;)I") => match arguments {
+                [Value::Reference(reference)] => {
+                    Some(Value::Int(self.heap.object_identity(*reference)? as i32))
+                }
+                [Value::Null] => Some(Value::Int(0)),
+                _ => return Err(JayError::new("System.identityHashCode expected an object")),
+            },
+            ("java/lang/String", "intern", "()Ljava/lang/String;") => {
+                let text = self.java_string(instance_receiver(receiver)?)?;
+                Some(Value::Reference(self.intern_string(&text)?))
+            }
             ("java/lang/Object", "getClass", "()Ljava/lang/Class;") => {
                 let class_name = self.reference_type_name(instance_receiver(receiver)?)?;
                 Some(Value::Reference(self.class_mirror(&class_name)?))

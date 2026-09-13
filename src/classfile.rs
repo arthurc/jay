@@ -398,9 +398,7 @@ impl<'a> Parser<'a> {
                 1 => {
                     let length = self.read_u2()? as usize;
                     let bytes = self.read_bytes(length)?;
-                    let value = String::from_utf8(bytes.to_vec())
-                        .map_err(|_| JayError::new("invalid UTF-8 in constant pool"))?;
-                    CpEntry::Utf8(value)
+                    CpEntry::Utf8(decode_modified_utf8(bytes)?)
                 }
                 3 => CpEntry::Integer(self.read_u4()? as i32),
                 4 => CpEntry::Float(f32::from_bits(self.read_u4()?)),
@@ -668,6 +666,46 @@ impl<'a> Parser<'a> {
     fn skip(&mut self, length: usize) -> JayResult<()> {
         self.read_bytes(length).map(|_| ())
     }
+}
+
+/// Decodes the JVM's "modified UTF-8" (JVMS §4.4.7): `NUL` is stored as
+/// `C0 80`, and supplementary characters as two 3-byte-encoded surrogates.
+/// Unpaired surrogates cannot be represented in a Rust string and become
+/// U+FFFD.
+fn decode_modified_utf8(bytes: &[u8]) -> JayResult<String> {
+    let invalid = || JayError::new("invalid modified UTF-8 in constant pool");
+    let mut units = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let first = bytes[index];
+        let (unit, width) = match first {
+            0x01..=0x7F => (first as u16, 1),
+            0xC0..=0xDF => {
+                let second = *bytes.get(index + 1).ok_or_else(invalid)?;
+                if second & 0xC0 != 0x80 {
+                    return Err(invalid());
+                }
+                (((first as u16 & 0x1F) << 6) | (second as u16 & 0x3F), 2)
+            }
+            0xE0..=0xEF => {
+                let second = *bytes.get(index + 1).ok_or_else(invalid)?;
+                let third = *bytes.get(index + 2).ok_or_else(invalid)?;
+                if second & 0xC0 != 0x80 || third & 0xC0 != 0x80 {
+                    return Err(invalid());
+                }
+                (
+                    ((first as u16 & 0x0F) << 12)
+                        | ((second as u16 & 0x3F) << 6)
+                        | (third as u16 & 0x3F),
+                    3,
+                )
+            }
+            _ => return Err(invalid()),
+        };
+        units.push(unit);
+        index += width;
+    }
+    Ok(String::from_utf16_lossy(&units))
 }
 
 #[cfg(test)]
@@ -1001,5 +1039,26 @@ mod tests {
         let class_file = ClassFile::parse(&bytes).unwrap();
 
         assert_eq!(class_file.interfaces, vec!["Named", "Taggable"]);
+    }
+
+    #[test]
+    fn modified_utf8_decodes_nul_and_surrogate_pairs() {
+        assert_eq!(decode_modified_utf8(b"plain").unwrap(), "plain");
+        assert_eq!(
+            decode_modified_utf8(&[b'a', 0xC0, 0x80, b'b']).unwrap(),
+            "a\u{0}b"
+        );
+        assert_eq!(decode_modified_utf8(&[0xC3, 0xA9]).unwrap(), "\u{E9}");
+        // U+1F600 as a CESU-8 surrogate pair.
+        assert_eq!(
+            decode_modified_utf8(&[0xED, 0xA0, 0xBD, 0xED, 0xB8, 0x80]).unwrap(),
+            "\u{1F600}"
+        );
+        assert_eq!(
+            decode_modified_utf8(&[0xED, 0xA0, 0xBD]).unwrap(),
+            "\u{FFFD}"
+        );
+        assert!(decode_modified_utf8(&[0xC3]).is_err());
+        assert!(decode_modified_utf8(&[0xF0, 0x9F, 0x98, 0x80]).is_err());
     }
 }

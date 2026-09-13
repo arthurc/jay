@@ -113,11 +113,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
             }
             None => return Err(JayError::new("invokevirtual receiver type is unavailable")),
         };
-        if target_method_name == "toString"
-            && target_descriptor == "()Ljava/lang/String;"
-            && receiver_class_name == "java/util/Date"
-        {
-            return self.invoke_date_to_string(frame, receiver);
+        if target_method_name == "toString" && target_descriptor == "()Ljava/lang/String;" {
+            // Jay's Date and LocalDateTime are VM-side stand-ins whose
+            // interpreted toString() would read fields they do not have.
+            if receiver_class_name == "java/util/Date" {
+                return self.invoke_date_to_string(frame, receiver);
+            }
+            if receiver_class_name == "java/time/LocalDateTime" {
+                return self.invoke_local_date_time_to_string(frame, receiver);
+            }
         }
         if receiver_class_name == "java/lang/StringBuilder"
             && self.try_invoke_string_builder_method(
@@ -136,7 +140,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 &target_method_name,
                 &target_descriptor,
                 receiver,
-                &arguments,
             )?
         {
             return Ok(());
@@ -275,12 +278,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return self.invoke_simple_date_format_constructor(caller, &descriptor, &target_name);
         }
 
-        if target_class_name == "java/lang/String"
-            && self.try_invoke_string_constructor(caller, &target_descriptor)?
-        {
-            return Ok(());
-        }
-
         if target_class_name == "java/lang/StringBuilder"
             && self.try_invoke_string_builder_constructor(caller, &target_descriptor)?
         {
@@ -413,7 +410,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         )?;
 
         let value = apply_string_concat_recipe(&recipe, &text_arguments)?;
-        let reference = self.new_java_string(value);
+        let reference = self.new_java_string(value)?;
         frame.stack.push(Value::Reference(reference));
         self.collect_if_needed(frame);
         Ok(())
@@ -552,11 +549,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return self.invoke_integer_value_of(caller, &descriptor, &target_name);
         }
         if target_class_name == "java/lang/String"
-            && target_method_name == "valueOf"
-            && target_descriptor == "(Ljava/lang/Object;)Ljava/lang/String;"
+            && target_method_name == "format"
+            && target_descriptor == "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;"
         {
-            let descriptor = MethodDescriptor::parse(&target_descriptor)?;
-            return self.invoke_string_value_of_object(caller, &descriptor, &target_name);
+            return self.invoke_string_format(caller);
         }
         if target_class_name == "java/util/regex/Pattern"
             && target_method_name == "matches"
@@ -571,17 +567,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             return self.invoke_local_date_time_now(caller);
         }
-        if self.try_invoke_string_static(
-            caller,
-            &target_class_name,
-            &target_method_name,
-            &target_descriptor,
-        )? {
-            return Ok(());
-        }
-
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
-        let target_class_file = self.load_class_file(&target_class_name)?;
+        // Static methods are inherited, so resolution walks the superclass chain.
+        let target_class_file = self
+            .find_instance_method_class(
+                &target_class_name,
+                &target_method_name,
+                &target_descriptor,
+            )?
+            .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} not found")))?;
         let method = target_class_file
             .find_method(&target_method_name, &target_descriptor)
             .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} not found")))?;

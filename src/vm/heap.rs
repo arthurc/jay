@@ -44,7 +44,6 @@ struct HeapObject {
 
 #[derive(Debug)]
 enum ObjectKind {
-    String(String),
     Instance {
         class_name: String,
         fields: HashMap<FieldKey, Value>,
@@ -269,10 +268,6 @@ impl Heap {
         }
     }
 
-    pub(super) fn allocate_string(&mut self, value: impl Into<String>) -> ObjectRef {
-        self.allocate(ObjectKind::String(value.into()))
-    }
-
     pub(super) fn allocate_instance(&mut self, class_name: impl Into<String>) -> ObjectRef {
         self.allocate(ObjectKind::Instance {
             class_name: class_name.into(),
@@ -301,47 +296,6 @@ impl Heap {
         )))
     }
 
-    /// Allocates a `char[]` holding the given UTF-16 code units.
-    pub(super) fn allocate_char_array(&mut self, units: &[u16]) -> ObjectRef {
-        self.allocate(ObjectKind::PrimitiveArray(PrimitiveArray::Char(
-            units.to_vec(),
-        )))
-    }
-
-    /// Reads the UTF-16 code units of a `char[]`.
-    pub(super) fn char_array_units(&self, reference: ObjectRef) -> JayResult<&[u16]> {
-        match self.object(reference)?.kind {
-            ObjectKind::PrimitiveArray(PrimitiveArray::Char(ref units)) => Ok(units),
-            _ => Err(JayError::new(format!(
-                "expected char[] reference, found {}",
-                self.type_name(reference)?
-            ))),
-        }
-    }
-
-    /// Turns a freshly allocated `java.lang.String` instance into a native string.
-    ///
-    /// `new` allocates an empty instance before the constructor runs; the
-    /// constructor shim swaps the object kind in place so existing references
-    /// to the slot see the string value.
-    pub(super) fn replace_with_string(
-        &mut self,
-        reference: ObjectRef,
-        value: impl Into<String>,
-    ) -> JayResult<()> {
-        let object = self.object_mut(reference)?;
-        match object.kind {
-            ObjectKind::Instance { ref class_name, .. } if class_name == "java/lang/String" => {
-                object.kind = ObjectKind::String(value.into());
-                Ok(())
-            }
-            _ => Err(JayError::new(format!(
-                "expected uninitialized String instance, found {}",
-                self.type_name(reference)?
-            ))),
-        }
-    }
-
     fn allocate(&mut self, kind: ObjectKind) -> ObjectRef {
         let object = HeapObject {
             marked: false,
@@ -356,27 +310,6 @@ impl Heap {
         let reference = ObjectRef(self.objects.len());
         self.objects.push(Some(object));
         reference
-    }
-
-    pub(super) fn string(&self, reference: ObjectRef) -> JayResult<&str> {
-        match self.object(reference)?.kind {
-            ObjectKind::String(ref value) => Ok(value),
-            ObjectKind::Instance { ref class_name, .. } => Err(JayError::new(format!(
-                "expected String reference, found {}",
-                class_name.replace('/', ".")
-            ))),
-            ObjectKind::ObjectArray { ref descriptor, .. } => Err(JayError::new(format!(
-                "expected String reference, found {}",
-                reference_array_name(descriptor)
-            ))),
-            ObjectKind::PrimitiveArray(ref array) => Err(JayError::new(format!(
-                "expected String reference, found {}",
-                array.element().array_name()
-            ))),
-            ObjectKind::StringBuilder(_) => Err(JayError::new(
-                "expected String reference, found java.lang.StringBuilder",
-            )),
-        }
     }
 
     /// Reads the current contents of a `StringBuilder`.
@@ -424,7 +357,6 @@ impl Heap {
 
     pub(super) fn value_type(&self, reference: ObjectRef) -> JayResult<Option<ValueType>> {
         match self.object(reference)?.kind {
-            ObjectKind::String(_) => Ok(Some(ValueType::Reference("java/lang/String".to_string()))),
             ObjectKind::Instance { ref class_name, .. } => {
                 Ok(Some(ValueType::Reference(class_name.clone())))
             }
@@ -442,7 +374,6 @@ impl Heap {
 
     pub(super) fn type_name(&self, reference: ObjectRef) -> JayResult<String> {
         match self.object(reference)?.kind {
-            ObjectKind::String(_) => Ok("String".to_string()),
             ObjectKind::Instance { ref class_name, .. } => Ok(class_name.replace('/', ".")),
             ObjectKind::ObjectArray { ref descriptor, .. } => Ok(reference_array_name(descriptor)),
             ObjectKind::PrimitiveArray(ref array) => Ok(array.element().array_name().to_string()),
@@ -453,9 +384,6 @@ impl Heap {
     pub(super) fn instance_class_name(&self, reference: ObjectRef) -> JayResult<&str> {
         match self.object(reference)?.kind {
             ObjectKind::Instance { ref class_name, .. } => Ok(class_name),
-            ObjectKind::String(_) => {
-                Err(JayError::new("expected instance reference, found String"))
-            }
             ObjectKind::ObjectArray { ref descriptor, .. } => Err(JayError::new(format!(
                 "expected instance reference, found {}",
                 reference_array_name(descriptor)
@@ -479,9 +407,6 @@ impl Heap {
                 fields.insert(field, value);
                 Ok(())
             }
-            ObjectKind::String(_) => Err(JayError::new(
-                "expected instance reference for putfield, found String",
-            )),
             ObjectKind::ObjectArray { ref descriptor, .. } => Err(JayError::new(format!(
                 "expected instance reference for putfield, found {}",
                 reference_array_name(descriptor)
@@ -503,9 +428,6 @@ impl Heap {
     ) -> JayResult<Option<Value>> {
         match self.object(reference)?.kind {
             ObjectKind::Instance { ref fields, .. } => Ok(fields.get(field).cloned()),
-            ObjectKind::String(_) => Err(JayError::new(
-                "expected instance reference for getfield, found String",
-            )),
             ObjectKind::ObjectArray { ref descriptor, .. } => Err(JayError::new(format!(
                 "expected instance reference for getfield, found {}",
                 reference_array_name(descriptor)
@@ -705,7 +627,6 @@ impl Heap {
 
             object.marked = true;
             match object.kind {
-                ObjectKind::String(_) => Vec::new(),
                 ObjectKind::Instance { ref fields, .. } => {
                     fields.values().filter_map(Value::object_ref).collect()
                 }
@@ -854,7 +775,7 @@ mod tests {
 
         assert_eq!(heap.type_name(array).unwrap(), "int[]");
         assert!(
-            heap.string(array)
+            heap.instance_class_name(array)
                 .unwrap_err()
                 .to_string()
                 .contains("int[]")
@@ -915,23 +836,17 @@ mod tests {
             "java/lang/StringBuilder"
         );
         assert_eq!(heap.type_name(builder).unwrap(), "java.lang.StringBuilder");
-        assert!(heap.string(builder).is_err());
+        assert!(
+            heap.get_instance_field(builder, &FieldKey::new("x", "y", "I"))
+                .is_err()
+        );
 
         let plain = heap.allocate_instance("example/Empty");
         assert!(heap.replace_with_string_builder(plain, "").is_err());
     }
 
     #[test]
-    fn heap_allocates_and_resolves_string_objects() {
-        let mut heap = Heap::new();
-
-        let reference = heap.allocate_string("hello");
-
-        assert_eq!(heap.string(reference).unwrap(), "hello");
-    }
-
-    #[test]
-    fn heap_distinguishes_instance_objects_from_strings() {
+    fn heap_reports_instance_types() {
         let mut heap = Heap::new();
 
         let reference = heap.allocate_instance("example/Empty");
@@ -941,11 +856,9 @@ mod tests {
             Some(ValueType::Reference("example/Empty".to_string()))
         );
         assert_eq!(heap.type_name(reference).unwrap(), "example.Empty");
-        assert!(
-            heap.string(reference)
-                .unwrap_err()
-                .to_string()
-                .contains("expected String reference, found example.Empty")
+        assert_eq!(
+            heap.instance_class_name(reference).unwrap(),
+            "example/Empty"
         );
     }
 
@@ -955,7 +868,7 @@ mod tests {
         let instance = heap.allocate_instance("example/Car");
         let year = FieldKey::new("example/Car", "year", "I");
         let make = FieldKey::new("example/Car", "make", "Ljava/lang/String;");
-        let make_value = heap.allocate_string("Toyota");
+        let make_value = heap.allocate_instance("java/lang/String");
 
         heap.put_instance_field(instance, year.clone(), Value::Int(2020))
             .unwrap();
@@ -976,8 +889,8 @@ mod tests {
     fn heap_object_arrays_store_length_and_references() {
         let mut heap = Heap::new();
         let array = heap.allocate_reference_array("[Ljava/lang/Object;", 2);
-        let first = heap.allocate_string("first");
-        let second = heap.allocate_string("second");
+        let first = heap.allocate_instance("example/First");
+        let second = heap.allocate_instance("example/Second");
 
         heap.store_array_reference(array, 0, Value::Reference(first))
             .unwrap();
@@ -1038,11 +951,11 @@ mod tests {
     #[test]
     fn heap_rejects_field_writes_to_non_instance_references() {
         let mut heap = Heap::new();
-        let string = heap.allocate_string("not an instance");
+        let array = heap.allocate_primitive_array(PrimitiveElement::Int, 0);
         let field = FieldKey::new("example/Car", "year", "I");
 
         let error = heap
-            .put_instance_field(string, field, Value::Int(2020))
+            .put_instance_field(array, field, Value::Int(2020))
             .unwrap_err();
 
         assert!(
@@ -1055,10 +968,10 @@ mod tests {
     #[test]
     fn heap_rejects_field_reads_from_non_instance_references() {
         let mut heap = Heap::new();
-        let string = heap.allocate_string("not an instance");
+        let array = heap.allocate_primitive_array(PrimitiveElement::Int, 0);
         let field = FieldKey::new("example/Car", "year", "I");
 
-        let error = heap.get_instance_field(string, &field).unwrap_err();
+        let error = heap.get_instance_field(array, &field).unwrap_err();
 
         assert!(
             error
@@ -1068,33 +981,33 @@ mod tests {
     }
 
     #[test]
-    fn garbage_collection_drops_unrooted_strings() {
+    fn garbage_collection_drops_unrooted_objects() {
         let mut heap = Heap::new();
-        let dropped = heap.allocate_string("drop me");
-        let kept = heap.allocate_string("keep me");
+        let dropped = heap.allocate_instance("example/Dropped");
+        let kept = heap.allocate_instance("example/Kept");
 
         let roots = [Value::Reference(kept)];
         heap.collect(roots.iter());
 
-        assert!(heap.string(dropped).is_err());
-        assert_eq!(heap.string(kept).unwrap(), "keep me");
+        assert!(heap.type_name(dropped).is_err());
+        assert_eq!(heap.type_name(kept).unwrap(), "example.Kept");
     }
 
     #[test]
     fn garbage_collection_keeps_references_stored_in_reachable_instance_fields() {
         let mut heap = Heap::new();
         let instance = heap.allocate_instance("example/Car");
-        let kept = heap.allocate_string("keep me");
-        let dropped = heap.allocate_string("drop me");
-        let field = FieldKey::new("example/Car", "make", "Ljava/lang/String;");
+        let kept = heap.allocate_instance("example/Kept");
+        let dropped = heap.allocate_instance("example/Dropped");
+        let field = FieldKey::new("example/Car", "make", "Lexample/Kept;");
         heap.put_instance_field(instance, field, Value::Reference(kept))
             .unwrap();
 
         let roots = [Value::Reference(instance)];
         heap.collect(roots.iter());
 
-        assert_eq!(heap.string(kept).unwrap(), "keep me");
-        assert!(heap.string(dropped).is_err());
+        assert_eq!(heap.type_name(kept).unwrap(), "example.Kept");
+        assert!(heap.type_name(dropped).is_err());
     }
 
     #[test]
@@ -1102,10 +1015,10 @@ mod tests {
         let mut heap = Heap::new();
         let root = heap.allocate_instance("example/Root");
         let child = heap.allocate_instance("example/Child");
-        let kept = heap.allocate_string("nested");
-        let dropped = heap.allocate_string("drop me");
+        let kept = heap.allocate_instance("example/Nested");
+        let dropped = heap.allocate_instance("example/Dropped");
         let child_field = FieldKey::new("example/Root", "child", "Lexample/Child;");
-        let value_field = FieldKey::new("example/Child", "value", "Ljava/lang/String;");
+        let value_field = FieldKey::new("example/Child", "value", "Lexample/Nested;");
         heap.put_instance_field(root, child_field, Value::Reference(child))
             .unwrap();
         heap.put_instance_field(child, value_field, Value::Reference(kept))
@@ -1114,35 +1027,35 @@ mod tests {
         let roots = [Value::Reference(root)];
         heap.collect(roots.iter());
 
-        assert_eq!(heap.string(kept).unwrap(), "nested");
-        assert!(heap.string(dropped).is_err());
+        assert_eq!(heap.type_name(kept).unwrap(), "example.Nested");
+        assert!(heap.type_name(dropped).is_err());
     }
 
     #[test]
     fn garbage_collection_reuses_freed_slots_without_moving_live_references() {
         let mut heap = Heap::new();
-        let live = heap.allocate_string("live");
-        let dead = heap.allocate_string("dead");
+        let live = heap.allocate_instance("example/Live");
+        let dead = heap.allocate_instance("example/Dead");
 
         let roots = [Value::Reference(live)];
         heap.collect(roots.iter());
-        let reused = heap.allocate_string("reused");
+        let reused = heap.allocate_instance("example/Reused");
 
-        assert_eq!(heap.string(live).unwrap(), "live");
+        assert_eq!(heap.type_name(live).unwrap(), "example.Live");
         assert_eq!(reused, dead);
-        assert_eq!(heap.string(reused).unwrap(), "reused");
+        assert_eq!(heap.type_name(reused).unwrap(), "example.Reused");
     }
 
     #[test]
     fn heap_requests_collection_at_default_threshold_and_resets_after_collecting() {
         let mut heap = Heap::new();
 
-        for index in 0..DEFAULT_GC_THRESHOLD - 1 {
-            heap.allocate_string(format!("value {index}"));
+        for _ in 0..DEFAULT_GC_THRESHOLD - 1 {
+            heap.allocate_instance("example/Filler");
             assert!(!heap.should_collect());
         }
 
-        heap.allocate_string("threshold");
+        heap.allocate_instance("example/Threshold");
         assert!(heap.should_collect());
 
         heap.collect(std::iter::empty::<&Value>());

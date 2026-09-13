@@ -25,6 +25,8 @@ pub(super) struct Interpreter<'a, W: Write> {
     pub(super) static_fields: HashMap<FieldKey, Value>,
     /// Heap-allocated `java.lang.Class` mirrors loaded by class literals.
     pub(super) class_mirrors: HashMap<String, ObjectRef>,
+    /// Canonical `String` objects for literals and `String.intern()`, keyed by text.
+    pub(super) interned_strings: HashMap<String, ObjectRef>,
     pub(super) initialized_classes: HashSet<String>,
     pub(super) initializing_classes: HashSet<String>,
     /// Parsed class files keyed by internal name, so each class is parsed once per run.
@@ -70,6 +72,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             saved_roots: Vec::new(),
             static_fields: HashMap::new(),
             class_mirrors: HashMap::new(),
+            interned_strings: HashMap::new(),
             initialized_classes: HashSet::new(),
             initializing_classes: HashSet::new(),
             class_cache: RefCell::new(HashMap::new()),

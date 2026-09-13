@@ -42,7 +42,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .ok_or_else(|| JayError::new("expected a VM fault to materialize"))?;
         let exception = self.heap.allocate_instance(class_name);
         if let Some(message) = error.fault_message() {
-            let message = self.new_java_string(message);
+            let message = self.new_java_string(message)?;
             self.heap.put_instance_field(
                 exception,
                 detail_message_field(),

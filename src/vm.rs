@@ -78,6 +78,7 @@ impl Vm {
             .ok_or_else(|| JayError::new(format!("main method in {main_class} has no Code")))?;
 
         let mut interpreter = Interpreter::new(&self.classes, output);
+        interpreter.boot_runtime()?;
         let mut frame = if main.descriptor == "([Ljava/lang/String;)V" {
             let args = interpreter.allocate_program_args(program_args)?;
             Frame::with_arguments(code.max_locals, vec![Value::Reference(args)])?

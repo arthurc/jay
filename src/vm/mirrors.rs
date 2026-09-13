@@ -65,7 +65,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         // can allocate, and the name string is rooted through the mirror.
         let mirror = self.heap.allocate_instance("java/lang/Class");
         self.class_mirrors.insert(type_name.to_string(), mirror);
-        let name = self.new_java_string(binary_name(type_name));
+        let name = self.new_java_string(binary_name(type_name))?;
         self.heap.put_instance_field(
             mirror,
             class_field("name", "Ljava/lang/String;"),

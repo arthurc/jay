@@ -22,9 +22,38 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .cloned()
             .chain(self.static_fields.values().cloned())
             .chain(self.class_mirrors.values().copied().map(Value::Reference))
+            .chain(
+                self.interned_strings
+                    .values()
+                    .copied()
+                    .map(Value::Reference),
+            )
             .chain(current_frame.roots().cloned())
             .collect::<Vec<_>>();
         self.heap.collect(roots.iter());
+    }
+
+    /// Performs the slice of HotSpot's `System.initPhase1()` that JDK library
+    /// code depends on: installing the `JavaLangAccess` bridge that
+    /// `SharedSecrets.getJavaLangAccess()` hands to `StringUTF16`, `EnumMap`,
+    /// `StringJoiner`, and friends. Runs `System.setJavaLangAccess()` once,
+    /// before `main`.
+    pub(super) fn boot_runtime(&mut self) -> JayResult<()> {
+        let system = self.load_class_file("java/lang/System")?;
+        let method = system
+            .find_method("setJavaLangAccess", "()V")
+            .ok_or_else(|| JayError::new("java.lang.System.setJavaLangAccess()V not found"))?;
+        let code = method
+            .code
+            .as_ref()
+            .ok_or_else(|| JayError::new("java.lang.System.setJavaLangAccess()V has no Code"))?;
+        let mut frame = Frame::new(code.max_locals);
+        match self.execute(&system, method, code, &mut frame)? {
+            None => Ok(()),
+            Some(_) => Err(JayError::new(
+                "java.lang.System.setJavaLangAccess()V returned a value",
+            )),
+        }
     }
 
     /// Allocates the `String[]` handed to `main(String[] args)`.
@@ -39,7 +68,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .heap
             .allocate_reference_array("[Ljava/lang/String;", program_args.len());
         for (index, argument) in program_args.iter().enumerate() {
-            let value = self.new_java_string(argument.clone());
+            let value = self.new_java_string(argument.clone())?;
             self.heap
                 .store_array_reference(array, index, Value::Reference(value))?;
         }
