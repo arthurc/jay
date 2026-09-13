@@ -1306,10 +1306,9 @@ public class Main {
 
     assert!(!output.status.success(), "jay unexpectedly succeeded");
     assert!(String::from_utf8_lossy(&output.stdout).is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("cannot store java.lang.Integer in java.lang.String[]")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).starts_with(
+        "Exception in thread \"main\" java.lang.ArrayStoreException: java.lang.Integer\n"
+    ));
 }
 
 #[test]
@@ -1340,4 +1339,54 @@ public class Main {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+fn runs_instanceof_checks() {
+    let root = temp_dir("instanceof-checks");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+interface Shape {}
+
+class Circle implements Shape {}
+
+class Dot extends Circle {}
+
+public class Main {
+    static Object dot = new Dot();
+    static Object text = "text";
+    static Object none = null;
+    static Object strings = new String[1];
+
+    public static void main(String[] args) {
+        System.out.println(dot instanceof Dot);
+        System.out.println(dot instanceof Circle);
+        System.out.println(dot instanceof Shape);
+        System.out.println(dot instanceof String);
+        System.out.println(text instanceof String);
+        System.out.println(text instanceof CharSequence);
+        System.out.println(none instanceof Object);
+        System.out.println(strings instanceof Object);
+        System.out.println(strings instanceof String[]);
+        System.out.println(strings instanceof Object[]);
+        System.out.println(strings instanceof Shape);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "true\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\ntrue\ntrue\nfalse\n"
+    );
 }

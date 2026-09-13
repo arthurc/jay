@@ -8,7 +8,11 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("jay: {error}");
+            if error.is_java_exception() {
+                eprintln!("Exception in thread \"main\" {error}");
+            } else {
+                eprintln!("jay: {error}");
+            }
             for frame in error.java_stack_trace() {
                 eprintln!(
                     "  at {}.{}{} (pc {})",
@@ -22,5 +26,5 @@ fn main() -> ExitCode {
 
 fn run() -> jay::JayResult<()> {
     let config = cli::parse_args(env::args().skip(1))?;
-    Vm::new(config.classpath)?.run_main(&config.main_class)
+    Vm::new(config.classpath)?.run_main(&config.main_class, &config.program_args)
 }

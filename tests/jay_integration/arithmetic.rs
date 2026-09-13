@@ -235,3 +235,164 @@ public class ZeroBranchMain {
     );
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
+
+#[test]
+fn runs_integer_remainder_negation_and_shifts() {
+    let root = temp_dir("integer-remainder-negation-shifts");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    static int ten = 10;
+    static int three = 3;
+    static int negative = -17;
+    static int shift = 33;
+
+    public static void main(String[] args) {
+        System.out.println(ten % three);
+        System.out.println(negative % three);
+        System.out.println(-ten);
+        System.out.println(ten << shift);
+        System.out.println(negative >> 1);
+        System.out.println(negative >>> 28);
+        System.out.println(ten | three);
+        System.out.println(ten & three);
+        System.out.println(ten ^ three);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "1\n-2\n-10\n20\n-9\n15\n11\n2\n9\n"
+    );
+}
+
+#[test]
+fn runs_long_arithmetic_and_comparison() {
+    let root = temp_dir("long-arithmetic-comparison");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    static long big = 1L << 40;
+    static long three = 3L;
+    static int ten = 10;
+    static int shift = 65;
+
+    public static void main(String[] args) {
+        System.out.println(big * three + 5);
+        System.out.println(big - three);
+        System.out.println(big / three);
+        System.out.println(big % three);
+        System.out.println(-big);
+        System.out.println(three << shift);
+        System.out.println(-big >> 38);
+        System.out.println(-big >>> 60);
+        System.out.println(big & (big + 1));
+        System.out.println(big | three);
+        System.out.println(big ^ big);
+        System.out.println(big > ten);
+        System.out.println(three == 3L);
+        System.out.println(three < big);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "3298534883333\n1099511627773\n366503875925\n1\n-1099511627776\n6\n-4\n15\n1099511627776\n1099511627779\n0\ntrue\ntrue\ntrue\n"
+    );
+}
+
+#[test]
+fn runs_int_long_conversions() {
+    let root = temp_dir("int-long-conversions");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    static int wide = 300;
+    static int negative = -1;
+    static long big = 1L << 40;
+
+    public static void main(String[] args) {
+        System.out.println((byte) wide);
+        System.out.println((short) (wide * 300));
+        System.out.println((int) (char) negative);
+        System.out.println((long) wide * wide * wide);
+        System.out.println((int) (big + 7));
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "44\n24464\n65535\n27000000\n7\n"
+    );
+}
+
+#[test]
+fn prints_chars_and_floats() {
+    let root = temp_dir("print-chars-floats");
+    compile_java(
+        &root,
+        "Main.java",
+        r#"
+public class Main {
+    static int ten = 10;
+    static float half = 0.5f;
+
+    public static void main(String[] args) {
+        System.out.println((char) (ten + 55));
+        System.out.println(half * 3);
+        System.out.println(half * 4);
+        System.out.println(half > 0.25f);
+    }
+}
+"#,
+    );
+
+    let output = jay(&["-cp", root.to_str().unwrap(), "Main"]);
+
+    assert!(
+        output.status.success(),
+        "jay failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "A\n1.5\n2.0\ntrue\n"
+    );
+}

@@ -13,6 +13,13 @@ pub type JayResult<T> = Result<T, JayError>;
 pub struct JayError {
     message: String,
     java_stack_trace: Vec<JavaStackFrame>,
+    /// Heap slot of the Java exception object in flight, when this error is a
+    /// thrown exception rather than a VM failure.
+    thrown_object: Option<usize>,
+    /// Internal name of the Java exception class a VM fault should become
+    /// (for example `java/lang/NullPointerException`) once the interpreter
+    /// materializes it. Cleared when the object is allocated.
+    fault_class: Option<&'static str>,
 }
 
 /// One interpreted Java frame active when a VM runtime error occurred.
@@ -50,7 +57,60 @@ impl JayError {
         Self {
             message: message.into(),
             java_stack_trace: Vec::new(),
+            thrown_object: None,
+            fault_class: None,
         }
+    }
+
+    /// Creates the error that carries a thrown Java exception object.
+    ///
+    /// `display` is the text Java prints for the exception, such as
+    /// `java.lang.IllegalStateException: boom`.
+    pub fn thrown(heap_slot: usize, display: impl Into<String>) -> Self {
+        Self {
+            thrown_object: Some(heap_slot),
+            ..Self::new(display)
+        }
+    }
+
+    /// Creates a VM fault that the interpreter turns into a Java exception of
+    /// `class_name` with `message` as its detail message (`None` for no message).
+    pub fn fault(class_name: &'static str, message: Option<String>) -> Self {
+        Self {
+            fault_class: Some(class_name),
+            ..Self::new(message.unwrap_or_default())
+        }
+    }
+
+    /// Converts a pending fault into a thrown error for `heap_slot`, keeping
+    /// any Java stack frames already recorded.
+    pub fn into_thrown(self, heap_slot: usize, display: impl Into<String>) -> Self {
+        Self {
+            message: display.into(),
+            java_stack_trace: self.java_stack_trace,
+            thrown_object: Some(heap_slot),
+            fault_class: None,
+        }
+    }
+
+    /// Whether this error represents a Java exception (thrown or a pending fault).
+    pub fn is_java_exception(&self) -> bool {
+        self.thrown_object.is_some() || self.fault_class.is_some()
+    }
+
+    /// Heap slot of the thrown exception object, if one has been materialized.
+    pub fn thrown_object(&self) -> Option<usize> {
+        self.thrown_object
+    }
+
+    /// Exception class of a VM fault that has not yet been materialized.
+    pub fn fault_class(&self) -> Option<&'static str> {
+        self.fault_class
+    }
+
+    /// The detail message of a fault, or `None` when the fault carries none.
+    pub fn fault_message(&self) -> Option<&str> {
+        (!self.message.is_empty()).then_some(self.message.as_str())
     }
 
     /// Adds a Java frame to the end of the stacktrace.
@@ -94,6 +154,36 @@ mod tests {
         error.push_java_stack_frame(JavaStackFrame::new("Main", "inner", "()V", 3));
 
         assert_eq!(error.to_string(), "unsupported bytecode");
+    }
+
+    #[test]
+    fn thrown_errors_carry_the_object_and_java_display_text() {
+        let error = JayError::thrown(7, "java.lang.IllegalStateException: boom");
+
+        assert!(error.is_java_exception());
+        assert_eq!(error.thrown_object(), Some(7));
+        assert_eq!(error.fault_class(), None);
+        assert_eq!(error.to_string(), "java.lang.IllegalStateException: boom");
+    }
+
+    #[test]
+    fn faults_name_the_exception_class_and_optional_message() {
+        let with_message = JayError::fault(
+            "java/lang/ArithmeticException",
+            Some("/ by zero".to_string()),
+        );
+        assert!(with_message.is_java_exception());
+        assert_eq!(
+            with_message.fault_class(),
+            Some("java/lang/ArithmeticException")
+        );
+        assert_eq!(with_message.fault_message(), Some("/ by zero"));
+
+        let without_message = JayError::fault("java/lang/NullPointerException", None);
+        assert_eq!(without_message.fault_message(), None);
+        assert_eq!(without_message.thrown_object(), None);
+
+        assert!(!JayError::new("unsupported bytecode").is_java_exception());
     }
 
     #[test]

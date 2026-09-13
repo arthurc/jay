@@ -2,10 +2,13 @@ use std::path::PathBuf;
 
 use crate::{JayError, JayResult};
 
+/// Parsed command line: `jay -cp <directory> <fully.qualified.MainClass> [args...]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub classpath: PathBuf,
     pub main_class: String,
+    /// Arguments after the main class, passed verbatim to `main(String[] args)`.
+    pub program_args: Vec<String>,
 }
 
 pub fn parse_args<I, S>(args: I) -> JayResult<Config>
@@ -16,7 +19,7 @@ where
     let args: Vec<String> = args.into_iter().map(Into::into).collect();
     if args.first().map(String::as_str) != Some("-cp") {
         return Err(JayError::new(
-            "usage: jay -cp <directory> <fully.qualified.MainClass>",
+            "usage: jay -cp <directory> <fully.qualified.MainClass> [args...]",
         ));
     }
 
@@ -26,10 +29,6 @@ where
 
     if args.len() < 3 {
         return Err(JayError::new("missing main class name"));
-    }
-
-    if args.len() > 3 {
-        return Err(JayError::new("unexpected extra arguments"));
     }
 
     let classpath = PathBuf::from(&args[1]);
@@ -56,6 +55,7 @@ where
     Ok(Config {
         classpath,
         main_class,
+        program_args: args[3..].to_vec(),
     })
 }
 
@@ -115,18 +115,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_extra_arguments() {
-        let classpath = temp_dir("extra");
+    fn collects_program_arguments_after_main_class() {
+        let classpath = temp_dir("program-args");
 
-        let error = parse_args([
+        let config = parse_args([
             "-cp".to_string(),
             classpath.display().to_string(),
             "Main".to_string(),
-            "extra".to_string(),
+            "a".to_string(),
+            "b c".to_string(),
         ])
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.to_string().contains("unexpected extra"));
+        assert_eq!(config.program_args, ["a", "b c"]);
+    }
+
+    #[test]
+    fn program_arguments_default_to_empty() {
+        let classpath = temp_dir("no-program-args");
+
+        let config = parse_args([
+            "-cp".to_string(),
+            classpath.display().to_string(),
+            "Main".to_string(),
+        ])
+        .unwrap();
+
+        assert!(config.program_args.is_empty());
     }
 
     #[test]

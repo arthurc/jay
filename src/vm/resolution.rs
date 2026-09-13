@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::io::Write;
+use std::rc::Rc;
 
 use super::descriptors;
 use super::interpreter::Interpreter;
@@ -10,10 +11,21 @@ use crate::classfile::{ClassFile, Method};
 use crate::{JayError, JayResult};
 
 impl<'a, W: Write> Interpreter<'a, W> {
-    pub(super) fn load_class_file(&self, internal_class_name: &str) -> JayResult<ClassFile> {
+    /// Loads and parses a class by internal name, returning the cached parse on repeat calls.
+    ///
+    /// Failed loads are not cached so a later lookup can still report the error.
+    pub(super) fn load_class_file(&self, internal_class_name: &str) -> JayResult<Rc<ClassFile>> {
+        if let Some(class_file) = self.class_cache.borrow().get(internal_class_name) {
+            return Ok(Rc::clone(class_file));
+        }
+
         let binary_name = internal_class_name.replace('/', ".");
         let bytes = self.classes.load_class_bytes(&binary_name)?;
-        ClassFile::parse(&bytes)
+        let class_file = Rc::new(ClassFile::parse(&bytes)?);
+        self.class_cache
+            .borrow_mut()
+            .insert(internal_class_name.to_string(), Rc::clone(&class_file));
+        Ok(class_file)
     }
 
     pub(super) fn resolve_instance_method_class(
@@ -21,7 +33,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         receiver_class_name: &str,
         method_name: &str,
         descriptor: &str,
-    ) -> JayResult<ClassFile> {
+    ) -> JayResult<Rc<ClassFile>> {
         self.find_instance_method_class(receiver_class_name, method_name, descriptor)?
             .ok_or_else(|| {
                 JayError::new(format!(
@@ -38,7 +50,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         receiver_class_name: &str,
         method_name: &str,
         descriptor: &str,
-    ) -> JayResult<Option<ClassFile>> {
+    ) -> JayResult<Option<Rc<ClassFile>>> {
         let mut next_class_name = Some(receiver_class_name.to_string());
         while let Some(class_name) = next_class_name {
             let class_file = self.load_class_file(&class_name)?;
@@ -56,7 +68,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         owner_class_name: &str,
         method_name: &str,
         descriptor: &str,
-    ) -> JayResult<(ClassFile, Method)> {
+    ) -> JayResult<(Rc<ClassFile>, Method)> {
         let class_file =
             self.resolve_instance_method_class(owner_class_name, method_name, descriptor)?;
         let method = class_file
@@ -79,7 +91,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         owner_interface_name: &str,
         method_name: &str,
         descriptor: &str,
-    ) -> JayResult<(ClassFile, Method)> {
+    ) -> JayResult<(Rc<ClassFile>, Method)> {
         let mut pending = vec![owner_interface_name.to_string()];
         let mut visited = HashSet::new();
         while let Some(interface_name) = pending.pop() {
@@ -120,11 +132,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
             }
             let class_file = self.load_class_file(&candidate_class_name)?;
             if class_file.has_field(field_name, field_descriptor) {
-                return Ok(class_file.this_class);
+                return Ok(class_file.this_class.clone());
             }
 
-            if let Some(super_class) = class_file.super_class {
-                pending_class_names.push(super_class);
+            if let Some(super_class) = &class_file.super_class {
+                pending_class_names.push(super_class.clone());
             }
 
             for interface in class_file.interfaces.iter().rev() {
@@ -172,7 +184,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         expected: &descriptors::ValueType,
     ) -> JayResult<bool> {
         match (actual, expected) {
-            (descriptors::ValueType::Int, descriptors::ValueType::Int) => Ok(true),
+            (actual, expected) if actual.is_int_like() && expected.is_int_like() => Ok(true),
             (descriptors::ValueType::Float, descriptors::ValueType::Float) => Ok(true),
             (descriptors::ValueType::Long, descriptors::ValueType::Long) => Ok(true),
             (
@@ -218,8 +230,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
             }
         }
 
-        if let Some(super_class) = class_file.super_class {
-            return self.reference_matches_type(&super_class, expected_class, visited);
+        if let Some(super_class) = &class_file.super_class {
+            return self.reference_matches_type(super_class, expected_class, visited);
         }
 
         Ok(false)
@@ -229,10 +241,37 @@ impl<'a, W: Write> Interpreter<'a, W> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::rc::Rc;
 
     use crate::classpath::ClassResolver;
 
     use super::Interpreter;
+
+    fn test_classes(name: &str) -> ClassResolver {
+        let root = std::env::temp_dir().join(format!(
+            "jay-resolution-test-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        ClassResolver::new(PathBuf::from(&root)).unwrap()
+    }
+
+    #[test]
+    fn loading_a_class_twice_returns_the_cached_parse() {
+        let classes = test_classes("cache");
+        let mut output = Vec::new();
+        let interpreter = Interpreter::new(&classes, &mut output);
+
+        let first = interpreter.load_class_file("java/lang/Object").unwrap();
+        let second = interpreter.load_class_file("java/lang/Object").unwrap();
+
+        assert!(Rc::ptr_eq(&first, &second));
+        assert_eq!(first.this_class, "java/lang/Object");
+    }
 
     #[test]
     fn string_is_assignable_to_char_sequence_but_not_unrelated_types() {

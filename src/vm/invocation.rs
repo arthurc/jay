@@ -5,6 +5,7 @@ use std::io::Write;
 use super::descriptors::{MethodDescriptor, ReturnType, ValueType};
 use super::frame::Frame;
 use super::interpreter::Interpreter;
+use super::native::{char_to_string, float_to_string};
 use super::native_runtime::current_time_millis;
 use super::runtime::apply_string_concat_recipe;
 use super::value::Value;
@@ -31,7 +32,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 "(Ljava/lang/Object;)V" => {
                     let value = frame.pop_reference()?;
                     frame.pop_print_stream()?;
-                    let text = self.println_object_text(value)?;
+                    // Keep the value rooted while an interpreted toString() may run.
+                    frame.stack.push(value.clone());
+                    let object_type = ValueType::Reference("java/lang/Object".to_string());
+                    let text = self.value_to_text(frame, &object_type, &value)?;
+                    frame.pop()?;
                     writeln!(self.output, "{text}")?;
                     Ok(())
                 }
@@ -51,6 +56,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     let value = frame.pop_int()?;
                     frame.pop_print_stream()?;
                     let text = if value == 0 { "false" } else { "true" };
+                    writeln!(self.output, "{text}")?;
+                    Ok(())
+                }
+                "(C)V" => {
+                    let value = frame.pop_int()?;
+                    frame.pop_print_stream()?;
+                    let text = char_to_string(value);
+                    writeln!(self.output, "{text}")?;
+                    Ok(())
+                }
+                "(F)V" => {
+                    let value = frame.pop_float()?;
+                    frame.pop_print_stream()?;
+                    let text = float_to_string(value);
                     writeln!(self.output, "{text}")?;
                     Ok(())
                 }
@@ -78,6 +97,42 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Ok(());
         }
 
+        if method.class_name == "java/lang/Throwable"
+            && method.name == "fillInStackTrace"
+            && method.descriptor == "(I)Ljava/lang/Throwable;"
+        {
+            // HotSpot captures the native backtrace here; Jay reports Java
+            // frames through JayError instead, so the receiver is returned as is.
+            frame.pop_int()?;
+            let receiver = frame.pop_object_ref()?;
+            frame.stack.push(Value::Reference(receiver));
+            return Ok(());
+        }
+
+        if method.class_name == "java/lang/Object"
+            && method.name == "getClass"
+            && method.descriptor == "()Ljava/lang/Class;"
+        {
+            let receiver = frame.pop_object_ref()?;
+            let class_name = self.reference_type_name(receiver)?;
+            let mirror = self.class_mirror(&class_name);
+            frame.stack.push(Value::Reference(mirror));
+            self.collect_if_needed(frame);
+            return Ok(());
+        }
+
+        if method.class_name == "java/lang/Class"
+            && method.name == "getName"
+            && method.descriptor == "()Ljava/lang/String;"
+        {
+            let receiver = frame.pop_object_ref()?;
+            let class_name = self.mirrored_class_name(receiver)?;
+            let name = self.heap.allocate_string(class_name.replace('/', "."));
+            frame.stack.push(Value::Reference(name));
+            self.collect_if_needed(frame);
+            return Ok(());
+        }
+
         let target_method_name = method.name.to_string();
         let target_descriptor = method.descriptor.to_string();
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
@@ -94,7 +149,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let receiver = frame.pop_reference()?;
         let receiver = match receiver {
             Value::Reference(reference) => reference,
-            Value::Null => return Err(JayError::new("null reference on stack")),
+            Value::Null => return Err(JayError::fault("java/lang/NullPointerException", None)),
             other => {
                 return Err(JayError::new(format!(
                     "expected reference on stack, found {other:?}"
@@ -117,15 +172,26 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             return self.invoke_date_to_string(frame, receiver);
         }
-        if target_method_name == "hashCode"
-            && target_descriptor == "()I"
-            && receiver_class_name == "java/lang/String"
+        if receiver_class_name == "java/lang/StringBuilder"
+            && self.try_invoke_string_builder_method(
+                frame,
+                &target_method_name,
+                &target_descriptor,
+                receiver,
+                &arguments,
+            )?
         {
-            let value = self.heap.string(receiver)?;
-            let hash = value.encode_utf16().fold(0i32, |hash, unit| {
-                hash.wrapping_mul(31).wrapping_add(unit as i32)
-            });
-            frame.stack.push(Value::Int(hash));
+            return Ok(());
+        }
+        if receiver_class_name == "java/lang/String"
+            && self.try_invoke_string_method(
+                frame,
+                &target_method_name,
+                &target_descriptor,
+                receiver,
+                &arguments,
+            )?
+        {
             return Ok(());
         }
         if target_method_name == "format"
@@ -186,19 +252,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        let code = target_method
-            .code
-            .as_ref()
-            .ok_or_else(|| {
-                JayError::new(format!("invokevirtual target {target_name} has no Code"))
-            })?
-            .clone();
+        let code = target_method.code.as_ref().ok_or_else(|| {
+            JayError::new(format!("invokevirtual target {target_name} has no Code"))
+        })?;
 
         arguments.insert(0, Value::Reference(receiver));
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
         self.saved_roots
             .push(frame.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(&target_class_file, &target_method, &code, &mut callee);
+        let result = self.execute(&target_class_file, &target_method, code, &mut callee);
         self.saved_roots.pop();
         self.complete_call(
             frame,
@@ -254,15 +316,19 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return self.invoke_simple_date_format_constructor(caller, &descriptor, &target_name);
         }
 
-        let loaded_class_file;
-        let target_class_file = if target_class_name == caller_class_file.this_class {
-            caller_class_file
-        } else {
-            let binary_name = target_class_name.replace('/', ".");
-            let bytes = self.classes.load_class_bytes(&binary_name)?;
-            loaded_class_file = ClassFile::parse(&bytes)?;
-            &loaded_class_file
-        };
+        if target_class_name == "java/lang/String"
+            && self.try_invoke_string_constructor(caller, &target_descriptor)?
+        {
+            return Ok(());
+        }
+
+        if target_class_name == "java/lang/StringBuilder"
+            && self.try_invoke_string_builder_constructor(caller, &target_descriptor)?
+        {
+            return Ok(());
+        }
+
+        let target_class_file = self.load_class_file(&target_class_name)?;
         let method = target_class_file
             .find_method(&target_method_name, &target_descriptor)
             .ok_or_else(|| {
@@ -281,13 +347,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        let code = method
-            .code
-            .as_ref()
-            .ok_or_else(|| {
-                JayError::new(format!("invokespecial target {target_name} has no Code"))
-            })?
-            .clone();
+        let code = method.code.as_ref().ok_or_else(|| {
+            JayError::new(format!("invokespecial target {target_name} has no Code"))
+        })?;
 
         let mut arguments = self.pop_constructor_arguments(
             caller,
@@ -300,7 +362,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
         self.saved_roots
             .push(caller.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(target_class_file, method, &code, &mut callee);
+        let result = self.execute(&target_class_file, method, code, &mut callee);
         self.saved_roots.pop();
         match result? {
             None => Ok(()),
@@ -370,7 +432,19 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         };
         let recipe = class_file.constant_pool.string(*recipe_index)?.to_string();
-        let arguments = self.pop_method_arguments(
+        // Format the arguments while they are still on the operand stack so
+        // they stay rooted if an interpreted toString() triggers a collection.
+        let argument_count = descriptor.parameter_types.len();
+        let stack_len = frame.stack.len();
+        if stack_len < argument_count {
+            return Err(JayError::new("operand stack underflow"));
+        }
+        let mut text_arguments = Vec::with_capacity(argument_count);
+        for (offset, parameter_type) in descriptor.parameter_types.iter().enumerate() {
+            let value = frame.stack[stack_len - argument_count + offset].clone();
+            text_arguments.push(self.value_to_text(frame, parameter_type, &value)?);
+        }
+        self.pop_method_arguments(
             frame,
             &descriptor,
             &format!(
@@ -378,10 +452,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 dynamic.name, dynamic.descriptor
             ),
         )?;
-        let mut text_arguments = Vec::with_capacity(arguments.len());
-        for argument in arguments {
-            text_arguments.push(self.string_concat_argument(argument)?);
-        }
 
         let value = apply_string_concat_recipe(&recipe, &text_arguments)?;
         let reference = self.heap.allocate_string(value);
@@ -466,19 +536,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        let code = target_method
-            .code
-            .as_ref()
-            .ok_or_else(|| {
-                JayError::new(format!("invokeinterface target {target_name} has no Code"))
-            })?
-            .clone();
+        let code = target_method.code.as_ref().ok_or_else(|| {
+            JayError::new(format!("invokeinterface target {target_name} has no Code"))
+        })?;
 
         arguments.insert(0, Value::Reference(receiver));
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
         self.saved_roots
             .push(caller.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(&target_class_file, &target_method, &code, &mut callee);
+        let result = self.execute(&target_class_file, &target_method, code, &mut callee);
         self.saved_roots.pop();
         self.complete_call(
             caller,
@@ -546,17 +612,17 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             return self.invoke_local_date_time_now(caller);
         }
+        if self.try_invoke_string_static(
+            caller,
+            &target_class_name,
+            &target_method_name,
+            &target_descriptor,
+        )? {
+            return Ok(());
+        }
 
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
-        let loaded_class_file;
-        let target_class_file = if target_class_name == caller_class_file.this_class {
-            caller_class_file
-        } else {
-            let binary_name = target_class_name.replace('/', ".");
-            let bytes = self.classes.load_class_bytes(&binary_name)?;
-            loaded_class_file = ClassFile::parse(&bytes)?;
-            &loaded_class_file
-        };
+        let target_class_file = self.load_class_file(&target_class_name)?;
         let method = target_class_file
             .find_method(&target_method_name, &target_descriptor)
             .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} not found")))?;
@@ -582,11 +648,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        let code = method
-            .code
-            .as_ref()
-            .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} has no Code")))?
-            .clone();
+        let code = method.code.as_ref().ok_or_else(|| {
+            JayError::new(format!("invokestatic target {target_name} has no Code"))
+        })?;
 
         let arguments = self.pop_method_arguments(
             caller,
@@ -596,7 +660,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
         self.saved_roots
             .push(caller.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(target_class_file, method, &code, &mut callee);
+        let result = self.execute(&target_class_file, method, code, &mut callee);
         self.saved_roots.pop();
         self.complete_call(
             caller,

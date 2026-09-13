@@ -21,8 +21,91 @@ pub(super) fn read_i2(bytes: &[u8], pc: &mut usize) -> JayResult<i16> {
     Ok(read_u2(bytes, pc)? as i16)
 }
 
-pub(super) fn branch_target(code_len: usize, opcode_pc: usize, offset: i16) -> JayResult<usize> {
-    let target = opcode_pc as i64 + offset as i64;
+pub(super) fn read_i4(bytes: &[u8], pc: &mut usize) -> JayResult<i32> {
+    let high = read_u2(bytes, pc)? as u32;
+    let low = read_u2(bytes, pc)? as u32;
+    Ok(((high << 16) | low) as i32)
+}
+
+/// Advances `pc` past the zero padding that aligns `tableswitch`/`lookupswitch`
+/// operands to a four-byte boundary relative to the start of the code array.
+fn skip_switch_padding(bytes: &[u8], pc: &mut usize) -> JayResult<()> {
+    while !(*pc).is_multiple_of(4) {
+        if read_u1(bytes, pc)? != 0 {
+            return Err(JayError::new("switch padding byte is nonzero"));
+        }
+    }
+    Ok(())
+}
+
+/// Decodes the `tableswitch` operands after the opcode and returns the branch target for `key`.
+pub(super) fn tableswitch_target(
+    bytes: &[u8],
+    opcode_pc: usize,
+    pc: &mut usize,
+    key: i32,
+) -> JayResult<usize> {
+    skip_switch_padding(bytes, pc)?;
+    let default_offset = read_i4(bytes, pc)?;
+    let low = read_i4(bytes, pc)?;
+    let high = read_i4(bytes, pc)?;
+    if low > high {
+        return Err(JayError::new(format!(
+            "tableswitch low {low} exceeds high {high}"
+        )));
+    }
+
+    let entries = (high as i64 - low as i64 + 1) as usize;
+    let table_start = *pc;
+    *pc = table_start
+        .checked_add(entries * 4)
+        .ok_or_else(|| JayError::new("tableswitch table overflows bytecode"))?;
+    if *pc > bytes.len() {
+        return Err(JayError::new("unexpected end of bytecode in tableswitch"));
+    }
+
+    let offset = if key < low || key > high {
+        default_offset
+    } else {
+        let mut entry_pc = table_start + (key as i64 - low as i64) as usize * 4;
+        read_i4(bytes, &mut entry_pc)?
+    };
+    branch_target(bytes.len(), opcode_pc, offset)
+}
+
+/// Decodes the `lookupswitch` operands after the opcode and returns the branch target for `key`.
+pub(super) fn lookupswitch_target(
+    bytes: &[u8],
+    opcode_pc: usize,
+    pc: &mut usize,
+    key: i32,
+) -> JayResult<usize> {
+    skip_switch_padding(bytes, pc)?;
+    let default_offset = read_i4(bytes, pc)?;
+    let pair_count = read_i4(bytes, pc)?;
+    if pair_count < 0 {
+        return Err(JayError::new(format!(
+            "lookupswitch pair count {pair_count} is negative"
+        )));
+    }
+
+    let mut offset = default_offset;
+    for _ in 0..pair_count {
+        let candidate = read_i4(bytes, pc)?;
+        let candidate_offset = read_i4(bytes, pc)?;
+        if candidate == key {
+            offset = candidate_offset;
+        }
+    }
+    branch_target(bytes.len(), opcode_pc, offset)
+}
+
+pub(super) fn branch_target(
+    code_len: usize,
+    opcode_pc: usize,
+    offset: impl Into<i64>,
+) -> JayResult<usize> {
+    let target = opcode_pc as i64 + offset.into();
     if target < 0 || target >= code_len as i64 {
         return Err(JayError::new(format!(
             "branch target {target} out of bytecode range 0..{code_len}"
@@ -84,6 +167,65 @@ mod tests {
             at_end
                 .to_string()
                 .contains("branch target 10 out of bytecode range")
+        );
+    }
+
+    fn i4(value: i32) -> [u8; 4] {
+        value.to_be_bytes()
+    }
+
+    #[test]
+    fn tableswitch_selects_indexed_offset_or_default() {
+        // Opcode at pc 1 so three padding bytes follow.
+        let mut bytes = vec![0x00, 0xaa, 0, 0];
+        bytes.extend_from_slice(&i4(40)); // default
+        bytes.extend_from_slice(&i4(2)); // low
+        bytes.extend_from_slice(&i4(4)); // high
+        bytes.extend_from_slice(&i4(10));
+        bytes.extend_from_slice(&i4(20));
+        bytes.extend_from_slice(&i4(30));
+        bytes.resize(64, 0);
+
+        for (key, expected) in [(2, 11), (3, 21), (4, 31), (1, 41), (5, 41)] {
+            let mut pc = 2;
+            assert_eq!(
+                tableswitch_target(&bytes, 1, &mut pc, key).unwrap(),
+                expected
+            );
+            assert_eq!(pc, 4 + 12 + 12);
+        }
+    }
+
+    #[test]
+    fn lookupswitch_matches_pairs_or_default() {
+        let mut bytes = vec![0xab, 0, 0, 0];
+        bytes.extend_from_slice(&i4(50)); // default
+        bytes.extend_from_slice(&i4(2)); // npairs
+        bytes.extend_from_slice(&i4(1));
+        bytes.extend_from_slice(&i4(10));
+        bytes.extend_from_slice(&i4(100));
+        bytes.extend_from_slice(&i4(20));
+        bytes.resize(64, 0);
+
+        for (key, expected) in [(1, 10), (100, 20), (7, 50)] {
+            let mut pc = 1;
+            assert_eq!(
+                lookupswitch_target(&bytes, 0, &mut pc, key).unwrap(),
+                expected
+            );
+            assert_eq!(pc, 4 + 8 + 16);
+        }
+    }
+
+    #[test]
+    fn switch_padding_must_be_zero() {
+        let bytes = vec![0xab, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut pc = 1;
+        assert!(
+            lookupswitch_target(&bytes, 0, &mut pc, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("padding")
         );
     }
 

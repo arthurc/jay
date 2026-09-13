@@ -21,3 +21,15 @@ mod class_initialization;
 
 #[path = "jay_integration/errors.rs"]
 mod errors;
+
+#[path = "jay_integration/program_args.rs"]
+mod program_args;
+
+#[path = "jay_integration/control_flow.rs"]
+mod control_flow;
+
+#[path = "jay_integration/arrays.rs"]
+mod arrays;
+
+#[path = "jay_integration/strings.rs"]
+mod strings;

@@ -1,5 +1,7 @@
+mod arithmetic;
 mod bytecode;
 mod descriptors;
+mod exceptions;
 mod fields;
 mod frame;
 mod heap;
@@ -10,6 +12,8 @@ mod native;
 mod native_runtime;
 mod resolution;
 mod runtime;
+mod string_builder_shims;
+mod string_shims;
 mod value;
 
 use std::io::{self, Write};
@@ -17,6 +21,7 @@ use std::path::PathBuf;
 
 use frame::Frame;
 use interpreter::Interpreter;
+use value::Value;
 
 use crate::classfile::ClassFile;
 use crate::classpath::ClassResolver;
@@ -35,13 +40,22 @@ impl Vm {
         })
     }
 
-    pub fn run_main(&self, main_class: &str) -> JayResult<()> {
+    /// Runs `main` in `main_class` with `program_args`, writing program output to stdout.
+    pub fn run_main(&self, main_class: &str, program_args: &[String]) -> JayResult<()> {
         let stdout = io::stdout();
         let mut handle = stdout.lock();
-        self.run_main_to_writer(main_class, &mut handle)
+        self.run_main_to_writer(main_class, program_args, &mut handle)
     }
 
-    pub fn run_main_to_writer<W: Write>(&self, main_class: &str, output: &mut W) -> JayResult<()> {
+    /// Runs `main` in `main_class` with `program_args`, writing program output to `output`.
+    ///
+    /// `main(String[] args)` receives `program_args` as a `String[]`; `main()` ignores them.
+    pub fn run_main_to_writer<W: Write>(
+        &self,
+        main_class: &str,
+        program_args: &[String],
+        output: &mut W,
+    ) -> JayResult<()> {
         let bytes = self.classes.load_class_bytes(main_class)?;
         let class_file = ClassFile::parse(&bytes)?;
         let main = class_file
@@ -61,7 +75,12 @@ impl Vm {
             .ok_or_else(|| JayError::new(format!("main method in {main_class} has no Code")))?;
 
         let mut interpreter = Interpreter::new(&self.classes, output);
-        let mut frame = Frame::new(code.max_locals);
+        let mut frame = if main.descriptor == "([Ljava/lang/String;)V" {
+            let args = interpreter.allocate_program_args(program_args)?;
+            Frame::with_arguments(code.max_locals, vec![Value::Reference(args)])?
+        } else {
+            Frame::new(code.max_locals)
+        };
         match interpreter.execute(&class_file, main, code, &mut frame)? {
             None => Ok(()),
             Some(_) => Err(JayError::new(format!(

@@ -27,6 +27,25 @@ impl<'a, W: Write> Interpreter<'a, W> {
         self.heap.collect(roots.iter());
     }
 
+    /// Allocates the `String[]` handed to `main(String[] args)`.
+    ///
+    /// No collection runs during this setup, so the array only needs to be
+    /// rooted once the caller places it in the main frame's locals.
+    pub(super) fn allocate_program_args(
+        &mut self,
+        program_args: &[String],
+    ) -> JayResult<ObjectRef> {
+        let array = self
+            .heap
+            .allocate_reference_array("[Ljava/lang/String;", program_args.len());
+        for (index, argument) in program_args.iter().enumerate() {
+            let value = self.heap.allocate_string(argument.clone());
+            self.heap
+                .store_array_reference(array, index, Value::Reference(value))?;
+        }
+        Ok(array)
+    }
+
     pub(super) fn class_mirror(&mut self, class_name: &str) -> ObjectRef {
         if let Some(reference) = self.class_mirrors.get(class_name) {
             return *reference;
@@ -36,6 +55,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let reference = self.heap.allocate_instance("java/lang/Class");
         self.class_mirrors.insert(class_name.to_string(), reference);
         reference
+    }
+
+    /// Finds the class name represented by a `java.lang.Class` mirror.
+    pub(super) fn mirrored_class_name(&self, mirror: ObjectRef) -> JayResult<String> {
+        self.class_mirrors
+            .iter()
+            .find(|(_, reference)| **reference == mirror)
+            .map(|(class_name, _)| class_name.clone())
+            .ok_or_else(|| {
+                JayError::new(format!(
+                    "expected Class mirror, found {}",
+                    self.heap.type_name(mirror).unwrap_or_default()
+                ))
+            })
     }
 
     pub(super) fn initialize_class(

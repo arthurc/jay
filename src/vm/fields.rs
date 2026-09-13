@@ -4,7 +4,7 @@ use std::io::Write;
 
 use super::descriptors::{FieldType, parse_field_descriptor};
 use super::frame::Frame;
-use super::heap::FieldKey;
+use super::heap::{FieldKey, PrimitiveElement};
 use super::interpreter::Interpreter;
 use super::value::Value;
 use crate::classfile::ClassFile;
@@ -33,13 +33,33 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let class_name = class_file.constant_pool.class_name(index)?;
         let length = frame.pop_int()?;
         if length < 0 {
-            return Err(JayError::new(format!("negative array length {length}")));
+            return Err(JayError::fault(
+                "java/lang/NegativeArraySizeException",
+                Some(length.to_string()),
+            ));
         }
 
         let descriptor = reference_array_descriptor(class_name);
         let reference = self
             .heap
             .allocate_reference_array(descriptor, length as usize);
+        frame.stack.push(Value::Reference(reference));
+        self.collect_if_needed(frame);
+        Ok(())
+    }
+
+    /// Implements `newarray`: allocates a primitive array of the `atype` element kind.
+    pub(super) fn new_primitive_array(&mut self, frame: &mut Frame, atype: u8) -> JayResult<()> {
+        let element = PrimitiveElement::from_atype(atype)?;
+        let length = frame.pop_int()?;
+        if length < 0 {
+            return Err(JayError::fault(
+                "java/lang/NegativeArraySizeException",
+                Some(length.to_string()),
+            ));
+        }
+
+        let reference = self.heap.allocate_primitive_array(element, length as usize);
         frame.stack.push(Value::Reference(reference));
         self.collect_if_needed(frame);
         Ok(())

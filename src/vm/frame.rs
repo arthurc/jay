@@ -124,6 +124,85 @@ impl Frame {
         Ok(())
     }
 
+    /// Implements `dup_x2`: duplicates the top value beneath the next one or two values.
+    ///
+    /// Category-2 values (`long`) occupy one stack entry in this VM, so the
+    /// second value being a `Long` means the copy goes only two slots down.
+    pub(super) fn duplicate_top_insert_three_down(&mut self) -> JayResult<()> {
+        let len = self.stack.len();
+        if len < 2 {
+            return Err(JayError::new("operand stack underflow on dup_x2"));
+        }
+
+        let value = self.stack[len - 1].clone();
+        let depth = if matches!(self.stack[len - 2], Value::Long(_)) {
+            2
+        } else {
+            3
+        };
+        if len < depth {
+            return Err(JayError::new("operand stack underflow on dup_x2"));
+        }
+        self.stack.insert(len - depth, value);
+        Ok(())
+    }
+
+    /// Implements `dup2`: duplicates the top two category-1 values or one `long`.
+    pub(super) fn duplicate_top_two(&mut self) -> JayResult<()> {
+        let len = self.stack.len();
+        let Some(top) = self.stack.last().cloned() else {
+            return Err(JayError::new("operand stack underflow on dup2"));
+        };
+        if matches!(top, Value::Long(_)) {
+            self.stack.push(top);
+            return Ok(());
+        }
+        if len < 2 {
+            return Err(JayError::new("operand stack underflow on dup2"));
+        }
+        let second = self.stack[len - 2].clone();
+        self.stack.push(second);
+        self.stack.push(top);
+        Ok(())
+    }
+
+    /// Implements `dup2_x1`: duplicates the top two words beneath the third.
+    pub(super) fn duplicate_top_two_insert_three_down(&mut self) -> JayResult<()> {
+        let len = self.stack.len();
+        let Some(top) = self.stack.last().cloned() else {
+            return Err(JayError::new("operand stack underflow on dup2_x1"));
+        };
+        if matches!(top, Value::Long(_)) {
+            if len < 2 {
+                return Err(JayError::new("operand stack underflow on dup2_x1"));
+            }
+            self.stack.insert(len - 2, top);
+            return Ok(());
+        }
+        if len < 3 {
+            return Err(JayError::new("operand stack underflow on dup2_x1"));
+        }
+        let second = self.stack[len - 2].clone();
+        self.stack.insert(len - 3, top);
+        self.stack.insert(len - 3, second);
+        Ok(())
+    }
+
+    /// Implements `swap` for two category-1 values.
+    pub(super) fn swap_top_two(&mut self) -> JayResult<()> {
+        let len = self.stack.len();
+        if len < 2 {
+            return Err(JayError::new("operand stack underflow on swap"));
+        }
+        if matches!(self.stack[len - 1], Value::Long(_))
+            || matches!(self.stack[len - 2], Value::Long(_))
+        {
+            return Err(JayError::new("swap requires two category-1 values"));
+        }
+        self.stack.swap(len - 1, len - 2);
+        Ok(())
+    }
+
     pub(super) fn references_equal(&self, left: &Value, right: &Value) -> JayResult<bool> {
         match (left, right) {
             (Value::Reference(left), Value::Reference(right)) => Ok(left == right),
@@ -264,7 +343,7 @@ impl Frame {
     pub(super) fn pop_object_ref(&mut self) -> JayResult<ObjectRef> {
         match self.pop_reference()? {
             Value::Reference(reference) => Ok(reference),
-            Value::Null => Err(JayError::new("null reference on stack")),
+            Value::Null => Err(JayError::fault("java/lang/NullPointerException", None)),
             other => Err(JayError::new(format!(
                 "expected reference on stack, found {other:?}"
             ))),
@@ -282,7 +361,11 @@ impl Frame {
 
     pub(super) fn pop_value_of_type(&mut self, value_type: &ValueType) -> JayResult<Value> {
         match value_type {
-            ValueType::Int => Ok(Value::Int(self.pop_int()?)),
+            ValueType::Boolean
+            | ValueType::Byte
+            | ValueType::Char
+            | ValueType::Short
+            | ValueType::Int => Ok(Value::Int(self.pop_int()?)),
             ValueType::Float => Ok(Value::Float(self.pop_float()?)),
             ValueType::Long => Ok(Value::Long(self.pop_long()?)),
             ValueType::Reference(_) => self.pop_reference(),
@@ -359,6 +442,70 @@ mod tests {
                 .to_string()
                 .contains("expected reference on stack, found Int(42)")
         );
+    }
+
+    fn stack_of(values: &[Value]) -> Frame {
+        let mut frame = Frame::new(0);
+        frame.stack.extend_from_slice(values);
+        frame
+    }
+
+    #[test]
+    fn dup_x2_inserts_under_two_ints_or_one_long() {
+        let mut frame = stack_of(&[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        frame.duplicate_top_insert_three_down().unwrap();
+        assert_eq!(
+            frame.stack,
+            [Value::Int(3), Value::Int(1), Value::Int(2), Value::Int(3)]
+        );
+
+        let mut frame = stack_of(&[Value::Long(1), Value::Int(3)]);
+        frame.duplicate_top_insert_three_down().unwrap();
+        assert_eq!(frame.stack, [Value::Int(3), Value::Long(1), Value::Int(3)]);
+    }
+
+    #[test]
+    fn dup2_copies_two_ints_or_one_long() {
+        let mut frame = stack_of(&[Value::Int(1), Value::Int(2)]);
+        frame.duplicate_top_two().unwrap();
+        assert_eq!(
+            frame.stack,
+            [Value::Int(1), Value::Int(2), Value::Int(1), Value::Int(2)]
+        );
+
+        let mut frame = stack_of(&[Value::Long(7)]);
+        frame.duplicate_top_two().unwrap();
+        assert_eq!(frame.stack, [Value::Long(7), Value::Long(7)]);
+    }
+
+    #[test]
+    fn dup2_x1_inserts_two_words_under_the_third() {
+        let mut frame = stack_of(&[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        frame.duplicate_top_two_insert_three_down().unwrap();
+        assert_eq!(
+            frame.stack,
+            [
+                Value::Int(2),
+                Value::Int(3),
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3)
+            ]
+        );
+
+        let mut frame = stack_of(&[Value::Int(1), Value::Long(2)]);
+        frame.duplicate_top_two_insert_three_down().unwrap();
+        assert_eq!(frame.stack, [Value::Long(2), Value::Int(1), Value::Long(2)]);
+    }
+
+    #[test]
+    fn swap_exchanges_two_ints_and_rejects_longs() {
+        let mut frame = stack_of(&[Value::Int(1), Value::Int(2)]);
+        frame.swap_top_two().unwrap();
+        assert_eq!(frame.stack, [Value::Int(2), Value::Int(1)]);
+
+        let mut frame = stack_of(&[Value::Long(1), Value::Int(2)]);
+        assert!(frame.swap_top_two().is_err());
     }
 
     #[test]

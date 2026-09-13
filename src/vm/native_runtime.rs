@@ -52,34 +52,16 @@ impl<'a, W: Write> Interpreter<'a, W> {
             ));
         };
 
-        match value {
-            Value::Null => {
-                let reference = self.heap.allocate_string("null");
-                caller.stack.push(Value::Reference(reference));
-                self.collect_if_needed(caller);
-            }
+        let reference = match value {
+            Value::Null => self.heap.allocate_string("null"),
+            // String.valueOf(String) returns its argument unchanged.
+            Value::Reference(reference) if self.heap.string(*reference).is_ok() => *reference,
             Value::Reference(reference) => {
-                let class_name = self.heap.instance_class_name(*reference).ok();
-                match class_name {
-                    Some("java/lang/Integer") => {
-                        let text = self.boxed_integer_value(*reference)?.to_string();
-                        let reference = self.heap.allocate_string(text);
-                        caller.stack.push(Value::Reference(reference));
-                        self.collect_if_needed(caller);
-                    }
-                    _ if matches!(
-                        self.heap.value_type(*reference)?,
-                        Some(super::descriptors::ValueType::Reference(ref name))
-                            if name == "java/lang/String"
-                    ) =>
-                    {
-                        caller.stack.push(Value::Reference(*reference));
-                    }
-                    _ => {
-                        let reference = self.invoke_reference_to_string(caller, *reference)?;
-                        caller.stack.push(Value::Reference(reference));
-                    }
-                }
+                // Keep the argument rooted while an interpreted toString() may run.
+                caller.stack.push(Value::Reference(*reference));
+                let text = self.reference_to_text(caller, *reference);
+                caller.pop()?;
+                self.heap.allocate_string(text?)
             }
             other => {
                 return Err(JayError::new(format!(
@@ -87,12 +69,17 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     other.type_name(&self.heap)?
                 )));
             }
-        }
-
+        };
+        caller.stack.push(Value::Reference(reference));
+        self.collect_if_needed(caller);
         Ok(())
     }
 
-    fn invoke_reference_to_string(
+    /// Runs an object's `toString()` and returns the resulting string reference.
+    ///
+    /// `receiver` is placed in the callee frame, so it stays rooted while the
+    /// interpreted method runs; the returned reference is fresh and unrooted.
+    pub(super) fn invoke_reference_to_string(
         &mut self,
         caller: &mut Frame,
         receiver: ObjectRef,
@@ -176,12 +163,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let code = target_method
             .code
             .as_ref()
-            .ok_or_else(|| JayError::new("String.valueOf(Object) toString target has no Code"))?
-            .clone();
+            .ok_or_else(|| JayError::new("String.valueOf(Object) toString target has no Code"))?;
         let mut callee = Frame::with_arguments(code.max_locals, vec![Value::Reference(receiver)])?;
         self.saved_roots
             .push(caller.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(&target_class_file, &target_method, &code, &mut callee);
+        let result = self.execute(&target_class_file, &target_method, code, &mut callee);
         self.saved_roots.pop();
 
         match result? {

@@ -1,14 +1,17 @@
 //! Core bytecode dispatch loop for the VM interpreter.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::rc::Rc;
 
+use super::arithmetic;
 use super::bytecode::{
-    branch_target, int_branch_taken, int_compare_branch_taken, read_i2, read_u1, read_u2,
+    branch_target, int_branch_taken, int_compare_branch_taken, lookupswitch_target, read_i2,
+    read_i4, read_u1, read_u2, tableswitch_target,
 };
 use super::frame::Frame;
 use super::heap::{FieldKey, Heap, ObjectRef};
-use super::runtime::checked_array_index;
 use super::value::Value;
 use crate::classfile::{ClassFile, Code, Method};
 use crate::classpath::ClassResolver;
@@ -24,6 +27,8 @@ pub(super) struct Interpreter<'a, W: Write> {
     pub(super) class_mirrors: HashMap<String, ObjectRef>,
     pub(super) initialized_classes: HashSet<String>,
     pub(super) initializing_classes: HashSet<String>,
+    /// Parsed class files keyed by internal name, so each class is parsed once per run.
+    pub(super) class_cache: RefCell<HashMap<String, Rc<ClassFile>>>,
 }
 
 struct MethodContext<'a> {
@@ -67,6 +72,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             class_mirrors: HashMap::new(),
             initialized_classes: HashSet::new(),
             initializing_classes: HashSet::new(),
+            class_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -83,12 +89,26 @@ impl<'a, W: Write> Interpreter<'a, W> {
             let opcode_pc = pc;
             let opcode = read_u1(&code.bytes, &mut pc)
                 .map_err(|error| error.with_java_stack_frame(context.stack_frame(opcode_pc)))?;
-            let result = self
-                .execute_instruction(class_file, code, frame, &mut pc, opcode_pc, opcode)
-                .map_err(|error| error.with_java_stack_frame(context.stack_frame(opcode_pc)))?;
-            match result {
-                InstructionResult::Continue => {}
-                InstructionResult::Return(value) => return Ok(value),
+            match self.execute_instruction(class_file, code, frame, &mut pc, opcode_pc, opcode) {
+                Ok(InstructionResult::Continue) => {}
+                Ok(InstructionResult::Return(value)) => return Ok(value),
+                Err(error) if error.is_java_exception() => {
+                    let (exception, error) = self.exception_object(error)?;
+                    match self.find_handler(code, opcode_pc, exception)? {
+                        Some(handler_pc) => {
+                            // The handler starts with only the exception on the stack.
+                            frame.stack.clear();
+                            frame.stack.push(Value::Reference(exception));
+                            pc = handler_pc;
+                        }
+                        None => {
+                            return Err(error.with_java_stack_frame(context.stack_frame(opcode_pc)));
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Err(error.with_java_stack_frame(context.stack_frame(opcode_pc)));
+                }
             }
         }
 
@@ -183,70 +203,84 @@ impl<'a, W: Write> Interpreter<'a, W> {
             0x58 => self.pop_two_words(frame)?,
             0x59 => frame.duplicate_top()?,
             0x5a => frame.duplicate_top_insert_two_down()?,
-            0x60 => {
+            0x5b => frame.duplicate_top_insert_three_down()?,
+            0x5c => frame.duplicate_top_two()?,
+            0x5d => frame.duplicate_top_two_insert_three_down()?,
+            0x5f => frame.swap_top_two()?,
+            0x60 | 0x64 | 0x68 | 0x6c | 0x70 | 0x78 | 0x7a | 0x7c | 0x7e | 0x80 | 0x82 => {
                 let right = frame.pop_int()?;
                 let left = frame.pop_int()?;
-                frame.stack.push(Value::Int(left.wrapping_add(right)));
+                frame
+                    .stack
+                    .push(Value::Int(arithmetic::int_binary(opcode, left, right)?));
             }
-            0x64 => {
-                let right = frame.pop_int()?;
-                let left = frame.pop_int()?;
-                frame.stack.push(Value::Int(left.wrapping_sub(right)));
+            0x61 | 0x65 | 0x69 | 0x6d | 0x71 | 0x7f | 0x81 | 0x83 => {
+                let right = frame.pop_long()?;
+                let left = frame.pop_long()?;
+                frame
+                    .stack
+                    .push(Value::Long(arithmetic::long_binary(opcode, left, right)?));
             }
-            0x68 => {
-                let right = frame.pop_int()?;
-                let left = frame.pop_int()?;
-                frame.stack.push(Value::Int(left.wrapping_mul(right)));
+            0x79 | 0x7b | 0x7d => {
+                let count = frame.pop_int()?;
+                let value = frame.pop_long()?;
+                frame
+                    .stack
+                    .push(Value::Long(arithmetic::long_shift(opcode, value, count)?));
             }
             0x6a => {
                 let right = frame.pop_float()?;
                 let left = frame.pop_float()?;
                 frame.stack.push(Value::Float(left * right));
             }
-            0x6c => {
-                let right = frame.pop_int()?;
-                let left = frame.pop_int()?;
-                if right == 0 {
-                    return Err(JayError::new("integer division by zero"));
-                }
-                frame.stack.push(Value::Int(left.wrapping_div(right)));
+            0x74 => {
+                let value = frame.pop_int()?;
+                frame.stack.push(Value::Int(value.wrapping_neg()));
             }
-            0x7c => {
-                let right = frame.pop_int()? as u32;
-                let left = frame.pop_int()? as u32;
-                frame
-                    .stack
-                    .push(Value::Int((left >> (right & 0x1f)) as i32));
+            0x75 => {
+                let value = frame.pop_long()?;
+                frame.stack.push(Value::Long(value.wrapping_neg()));
             }
-            0x7e => {
-                let right = frame.pop_int()?;
-                let left = frame.pop_int()?;
-                frame.stack.push(Value::Int(left & right));
-            }
-            0x82 => {
-                let right = frame.pop_int()?;
-                let left = frame.pop_int()?;
-                frame.stack.push(Value::Int(left ^ right));
+            0x85 => {
+                let value = frame.pop_int()?;
+                frame.stack.push(Value::Long(value as i64));
             }
             0x86 => {
                 let value = frame.pop_int()?;
+                frame.stack.push(Value::Float(value as f32));
+            }
+            0x88 => {
+                let value = frame.pop_long()?;
+                frame.stack.push(Value::Int(value as i32));
+            }
+            0x89 => {
+                let value = frame.pop_long()?;
                 frame.stack.push(Value::Float(value as f32));
             }
             0x8b => {
                 let value = frame.pop_float()?;
                 frame.stack.push(Value::Int(value as i32));
             }
-            0x96 => {
+            0x91..=0x93 => {
+                let value = frame.pop_int()?;
+                frame
+                    .stack
+                    .push(Value::Int(arithmetic::narrow_int(opcode, value)?));
+            }
+            0x94 => {
+                let right = frame.pop_long()?;
+                let left = frame.pop_long()?;
+                frame
+                    .stack
+                    .push(Value::Int(arithmetic::long_compare(left, right)));
+            }
+            0x95 | 0x96 => {
                 let right = frame.pop_float()?;
                 let left = frame.pop_float()?;
-                let result = if left.is_nan() || right.is_nan() || left > right {
-                    1
-                } else if left == right {
-                    0
-                } else {
-                    -1
-                };
-                frame.stack.push(Value::Int(result));
+                let nan_result = if opcode == 0x95 { -1 } else { 1 };
+                frame.stack.push(Value::Int(arithmetic::float_compare(
+                    left, right, nan_result,
+                )));
             }
             0x84 => {
                 let index = read_u1(&code.bytes, pc)? as usize;
@@ -281,6 +315,18 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 let offset = read_i2(&code.bytes, pc)?;
                 *pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
             }
+            0xaa => {
+                let key = frame.pop_int()?;
+                *pc = tableswitch_target(&code.bytes, opcode_pc, pc, key)?;
+            }
+            0xab => {
+                let key = frame.pop_int()?;
+                *pc = lookupswitch_target(&code.bytes, opcode_pc, pc, key)?;
+            }
+            0xc8 => {
+                let offset = read_i4(&code.bytes, pc)?;
+                *pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
+            }
             0xac => {
                 return Ok(InstructionResult::Return(Some(Value::Int(
                     frame.pop_int()?,
@@ -291,8 +337,18 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     frame.pop_long()?,
                 ))));
             }
+            0xae => {
+                return Ok(InstructionResult::Return(Some(Value::Float(
+                    frame.pop_float()?,
+                ))));
+            }
             0xb0 => return Ok(InstructionResult::Return(Some(frame.pop_reference()?))),
             0xb1 => return Ok(InstructionResult::Return(None)),
+            0xbf => {
+                let exception = frame.pop_object_ref()?;
+                let display = self.exception_display(exception)?;
+                return Err(JayError::thrown(exception.index(), display));
+            }
             0xb2 => {
                 let index = read_u2(&code.bytes, pc)?;
                 self.get_static(class_file, frame, index)?;
@@ -346,6 +402,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 let index = read_u2(&code.bytes, pc)?;
                 self.new_object(class_file, frame, index)?;
             }
+            0xbc => {
+                let atype = read_u1(&code.bytes, pc)?;
+                self.new_primitive_array(frame, atype)?;
+            }
             0xbd => {
                 let index = read_u2(&code.bytes, pc)?;
                 self.new_object_array(class_file, frame, index)?;
@@ -361,6 +421,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 let index = read_u2(&code.bytes, pc)?;
                 self.check_cast(class_file, frame, index)?;
             }
+            0xc1 => {
+                let index = read_u2(&code.bytes, pc)?;
+                self.instance_of(class_file, frame, index)?;
+            }
             0xc6 | 0xc7 => {
                 let offset = read_i2(&code.bytes, pc)?;
                 let reference = frame.pop_reference()?;
@@ -369,21 +433,51 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     *pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
                 }
             }
+            0x2e | 0x2f | 0x30 | 0x33 | 0x34 | 0x35 => {
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                let index = self.checked_array_index(reference, index)?;
+                let value = self.heap.load_primitive(reference, index)?;
+                frame.stack.push(value);
+            }
             0x32 => {
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
-                let value = self
-                    .heap
-                    .load_array_reference(reference, checked_array_index(index)?)?;
+                let index = self.checked_array_index(reference, index)?;
+                let value = self.heap.load_array_reference(reference, index)?;
                 frame.stack.push(value);
+            }
+            0x4f | 0x54 | 0x55 | 0x56 => {
+                let value = frame.pop_int()?;
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                let index = self.checked_array_index(reference, index)?;
+                self.heap
+                    .store_primitive(reference, index, Value::Int(value))?;
+            }
+            0x50 => {
+                let value = frame.pop_long()?;
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                let index = self.checked_array_index(reference, index)?;
+                self.heap
+                    .store_primitive(reference, index, Value::Long(value))?;
+            }
+            0x51 => {
+                let value = frame.pop_float()?;
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                let index = self.checked_array_index(reference, index)?;
+                self.heap
+                    .store_primitive(reference, index, Value::Float(value))?;
             }
             0x53 => {
                 let value = frame.pop_reference()?;
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
+                let index = self.checked_array_index(reference, index)?;
                 self.validate_reference_array_store(reference, &value)?;
-                self.heap
-                    .store_array_reference(reference, checked_array_index(index)?, value)?;
+                self.heap.store_array_reference(reference, index, value)?;
             }
             _ => {
                 return Err(JayError::new(format!(
@@ -401,17 +495,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Ok(());
         };
 
-        let actual = match self.heap.value_type(*stored_reference)? {
-            Some(super::descriptors::ValueType::Reference(reference_type)) => reference_type,
-            Some(other) => {
-                return Err(JayError::new(format!(
-                    "array store value had unexpected type {}",
-                    other.name()
-                )));
-            }
-            None => return Err(JayError::new("array store value type is unavailable")),
-        };
-
+        let actual = self.reference_type_name(*stored_reference)?;
         let descriptor = self.heap.array_descriptor(array)?.to_string();
         let Some(expected_component) = descriptor.strip_prefix('[') else {
             return Err(JayError::new(format!(
@@ -423,27 +507,91 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .and_then(|component| component.strip_suffix(';'))
             .unwrap_or(expected_component);
 
-        let compatible = if actual.starts_with('[') != expected.starts_with('[') {
-            expected == "java/lang/Object"
-        } else {
-            self.is_assignable_reference(&actual, expected)?
-        };
-        if compatible {
+        if self.is_reference_compatible(&actual, expected)? {
             return Ok(());
         }
 
-        Err(JayError::new(format!(
-            "cannot store {} in {}",
-            self.heap.type_name(*stored_reference)?,
-            reference_array_name(&descriptor)
-        )))
+        Err(JayError::fault(
+            "java/lang/ArrayStoreException",
+            Some(self.heap.type_name(*stored_reference)?),
+        ))
+    }
+
+    /// Implements `instanceof`: pushes 1 when the popped reference is non-null
+    /// and assignable to the constant-pool class, otherwise 0.
+    pub(super) fn instance_of(
+        &mut self,
+        class_file: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+    ) -> JayResult<()> {
+        let expected = class_file.constant_pool.class_name(index)?;
+        let value = frame.pop_reference()?;
+        let result = match value {
+            Value::Reference(reference) => {
+                let actual = self.reference_type_name(reference)?;
+                self.is_reference_compatible(&actual, expected)?
+            }
+            _ => false,
+        };
+        frame.stack.push(Value::Int(if result { 1 } else { 0 }));
+        Ok(())
+    }
+
+    /// Returns the runtime type of a heap reference as an internal class name or array descriptor.
+    pub(super) fn reference_type_name(&self, reference: ObjectRef) -> JayResult<String> {
+        match self.heap.value_type(reference)? {
+            Some(super::descriptors::ValueType::Reference(reference_type)) => Ok(reference_type),
+            Some(other) => Err(JayError::new(format!(
+                "reference had unexpected type {}",
+                other.name()
+            ))),
+            None => Err(JayError::new("reference type is unavailable")),
+        }
+    }
+
+    /// Checks whether a runtime type (class name or array descriptor) is assignable
+    /// to a constant-pool type (class name or array descriptor).
+    ///
+    /// Arrays are assignable to `Object`, `Cloneable`, `Serializable`, and to an
+    /// array type whose component the element type is assignable to. Class types
+    /// are never assignable to array types.
+    pub(super) fn is_reference_compatible(&self, actual: &str, expected: &str) -> JayResult<bool> {
+        match (actual.strip_prefix('['), expected.strip_prefix('[')) {
+            (None, None) => self.is_assignable_reference(actual, expected),
+            (Some(_), None) => Ok(matches!(
+                expected,
+                "java/lang/Object" | "java/lang/Cloneable" | "java/io/Serializable"
+            )),
+            (None, Some(_)) => Ok(false),
+            (Some(actual_component), Some(expected_component)) => {
+                if actual_component == expected_component {
+                    return Ok(true);
+                }
+                match (
+                    strip_class_component(actual_component),
+                    strip_class_component(expected_component),
+                ) {
+                    (Some(actual_class), Some(expected_class)) => {
+                        self.is_assignable_reference(actual_class, expected_class)
+                    }
+                    (Some(_), None) | (None, Some(_)) => {
+                        // Mixed primitive/class components never match, but a nested
+                        // array component may still be assignable to Object[].
+                        if actual_component.starts_with('[') {
+                            self.is_reference_compatible(actual_component, expected_component)
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    (None, None) => Ok(false),
+                }
+            }
+        }
     }
 }
 
-fn reference_array_name(descriptor: &str) -> String {
-    descriptor
-        .strip_prefix("[L")
-        .and_then(|descriptor| descriptor.strip_suffix(';'))
-        .map(|class_name| format!("{}[]", class_name.replace('/', ".")))
-        .unwrap_or_else(|| descriptor.replace('/', "."))
+/// Extracts `java/lang/String` from the array component `Ljava/lang/String;`.
+fn strip_class_component(component: &str) -> Option<&str> {
+    component.strip_prefix('L')?.strip_suffix(';')
 }
