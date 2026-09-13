@@ -176,12 +176,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let code = target_method
             .code
             .as_ref()
-            .ok_or_else(|| JayError::new("String.valueOf(Object) toString target has no Code"))?
-            .clone();
+            .ok_or_else(|| JayError::new("String.valueOf(Object) toString target has no Code"))?;
         let mut callee = Frame::with_arguments(code.max_locals, vec![Value::Reference(receiver)])?;
         self.saved_roots
             .push(caller.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(&target_class_file, &target_method, &code, &mut callee);
+        let result = self.execute(&target_class_file, &target_method, code, &mut callee);
         self.saved_roots.pop();
 
         match result? {

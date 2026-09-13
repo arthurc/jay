@@ -1,7 +1,9 @@
 //! Core bytecode dispatch loop for the VM interpreter.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::rc::Rc;
 
 use super::bytecode::{
     branch_target, int_branch_taken, int_compare_branch_taken, read_i2, read_u1, read_u2,
@@ -24,6 +26,8 @@ pub(super) struct Interpreter<'a, W: Write> {
     pub(super) class_mirrors: HashMap<String, ObjectRef>,
     pub(super) initialized_classes: HashSet<String>,
     pub(super) initializing_classes: HashSet<String>,
+    /// Parsed class files keyed by internal name, so each class is parsed once per run.
+    pub(super) class_cache: RefCell<HashMap<String, Rc<ClassFile>>>,
 }
 
 struct MethodContext<'a> {
@@ -67,6 +71,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             class_mirrors: HashMap::new(),
             initialized_classes: HashSet::new(),
             initializing_classes: HashSet::new(),
+            class_cache: RefCell::new(HashMap::new()),
         }
     }
 

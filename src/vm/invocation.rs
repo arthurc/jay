@@ -186,19 +186,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        let code = target_method
-            .code
-            .as_ref()
-            .ok_or_else(|| {
-                JayError::new(format!("invokevirtual target {target_name} has no Code"))
-            })?
-            .clone();
+        let code = target_method.code.as_ref().ok_or_else(|| {
+            JayError::new(format!("invokevirtual target {target_name} has no Code"))
+        })?;
 
         arguments.insert(0, Value::Reference(receiver));
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
         self.saved_roots
             .push(frame.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(&target_class_file, &target_method, &code, &mut callee);
+        let result = self.execute(&target_class_file, &target_method, code, &mut callee);
         self.saved_roots.pop();
         self.complete_call(
             frame,
@@ -254,15 +250,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return self.invoke_simple_date_format_constructor(caller, &descriptor, &target_name);
         }
 
-        let loaded_class_file;
-        let target_class_file = if target_class_name == caller_class_file.this_class {
-            caller_class_file
-        } else {
-            let binary_name = target_class_name.replace('/', ".");
-            let bytes = self.classes.load_class_bytes(&binary_name)?;
-            loaded_class_file = ClassFile::parse(&bytes)?;
-            &loaded_class_file
-        };
+        let target_class_file = self.load_class_file(&target_class_name)?;
         let method = target_class_file
             .find_method(&target_method_name, &target_descriptor)
             .ok_or_else(|| {
@@ -281,13 +269,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        let code = method
-            .code
-            .as_ref()
-            .ok_or_else(|| {
-                JayError::new(format!("invokespecial target {target_name} has no Code"))
-            })?
-            .clone();
+        let code = method.code.as_ref().ok_or_else(|| {
+            JayError::new(format!("invokespecial target {target_name} has no Code"))
+        })?;
 
         let mut arguments = self.pop_constructor_arguments(
             caller,
@@ -300,7 +284,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
         self.saved_roots
             .push(caller.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(target_class_file, method, &code, &mut callee);
+        let result = self.execute(&target_class_file, method, code, &mut callee);
         self.saved_roots.pop();
         match result? {
             None => Ok(()),
@@ -466,19 +450,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        let code = target_method
-            .code
-            .as_ref()
-            .ok_or_else(|| {
-                JayError::new(format!("invokeinterface target {target_name} has no Code"))
-            })?
-            .clone();
+        let code = target_method.code.as_ref().ok_or_else(|| {
+            JayError::new(format!("invokeinterface target {target_name} has no Code"))
+        })?;
 
         arguments.insert(0, Value::Reference(receiver));
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
         self.saved_roots
             .push(caller.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(&target_class_file, &target_method, &code, &mut callee);
+        let result = self.execute(&target_class_file, &target_method, code, &mut callee);
         self.saved_roots.pop();
         self.complete_call(
             caller,
@@ -548,15 +528,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
 
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
-        let loaded_class_file;
-        let target_class_file = if target_class_name == caller_class_file.this_class {
-            caller_class_file
-        } else {
-            let binary_name = target_class_name.replace('/', ".");
-            let bytes = self.classes.load_class_bytes(&binary_name)?;
-            loaded_class_file = ClassFile::parse(&bytes)?;
-            &loaded_class_file
-        };
+        let target_class_file = self.load_class_file(&target_class_name)?;
         let method = target_class_file
             .find_method(&target_method_name, &target_descriptor)
             .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} not found")))?;
@@ -582,11 +554,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        let code = method
-            .code
-            .as_ref()
-            .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} has no Code")))?
-            .clone();
+        let code = method.code.as_ref().ok_or_else(|| {
+            JayError::new(format!("invokestatic target {target_name} has no Code"))
+        })?;
 
         let arguments = self.pop_method_arguments(
             caller,
@@ -596,7 +566,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let mut callee = Frame::with_arguments(code.max_locals, arguments)?;
         self.saved_roots
             .push(caller.roots().cloned().collect::<Vec<_>>());
-        let result = self.execute(target_class_file, method, &code, &mut callee);
+        let result = self.execute(&target_class_file, method, code, &mut callee);
         self.saved_roots.pop();
         self.complete_call(
             caller,

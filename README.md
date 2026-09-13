@@ -90,6 +90,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main
 - Focused date/time shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `LocalDateTime.now()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
 - Class files with major versions 45 through 71 (Java 1.1 through Java 27)
+- Each class file is read and parsed once per run and shared by every call, field lookup, and hierarchy walk
 
 Primitive arrays, string interning, full collection semantics, general
 invokedynamic bootstrap execution, long arithmetic, broad date formatting,
