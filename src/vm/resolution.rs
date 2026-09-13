@@ -203,6 +203,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
         if actual_class == expected_class || expected_class == "java/lang/Object" {
             return Ok(true);
         }
+        if actual_class.starts_with('[') || expected_class.starts_with('[') {
+            return self.is_reference_compatible(actual_class, expected_class);
+        }
 
         self.reference_matches_type(actual_class, expected_class, &mut HashSet::new())
     }

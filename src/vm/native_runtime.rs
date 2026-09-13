@@ -117,13 +117,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let (target_class_file, target_method) = if declaring_method.is_private() {
             (declaring_class_file, declaring_method)
         } else {
-            let dispatch_class_name = if receiver_class_name.starts_with('[') {
-                "java/lang/Object"
-            } else {
-                &receiver_class_name
-            };
             let class_file = self.resolve_instance_method_class(
-                dispatch_class_name,
+                super::invocation::dispatch_class_name(&receiver_class_name),
                 &target_method_name,
                 &target_descriptor,
             )?;

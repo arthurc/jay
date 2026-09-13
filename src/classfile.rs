@@ -61,6 +61,14 @@ impl Method {
     pub fn is_public(&self) -> bool {
         self.access_flags & 0x0001 != 0
     }
+
+    pub fn is_native(&self) -> bool {
+        self.access_flags & 0x0100 != 0
+    }
+
+    pub fn is_abstract(&self) -> bool {
+        self.access_flags & 0x0400 != 0
+    }
 }
 
 #[derive(Debug, Clone)]

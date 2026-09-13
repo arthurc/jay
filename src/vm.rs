@@ -10,6 +10,7 @@ mod invocation;
 mod lifecycle;
 mod native;
 mod native_runtime;
+mod natives;
 mod resolution;
 mod runtime;
 mod string_builder_shims;

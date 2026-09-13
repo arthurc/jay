@@ -206,8 +206,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             return self.invoke_simple_date_format_set_time_zone(receiver, &arguments);
         }
+        // Array classes have no class file; their methods are Object's.
         let (declaring_class_file, declaring_method) = self.resolve_instance_method(
-            method.class_name,
+            dispatch_class_name(method.class_name),
             &target_method_name,
             &target_descriptor,
         )?;
@@ -215,7 +216,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             (declaring_class_file, declaring_method)
         } else {
             let class_file = self.resolve_instance_method_class(
-                &receiver_class_name,
+                dispatch_class_name(&receiver_class_name),
                 &target_method_name,
                 &target_descriptor,
             )?;
@@ -246,9 +247,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        if target_method.access_flags & 0x0100 != 0 || target_method.access_flags & 0x0400 != 0 {
+        if target_method.is_native() {
+            return self.invoke_native(
+                frame,
+                &target_class_file.this_class,
+                &target_method_name,
+                &target_descriptor,
+                Some(receiver),
+                &arguments,
+            );
+        }
+
+        if target_method.is_abstract() {
             return Err(JayError::new(format!(
-                "invokevirtual target {target_name} must not be native or abstract"
+                "invokevirtual target {target_name} must not be abstract"
             )));
         }
 
@@ -633,18 +645,25 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        if target_class_name == "java/lang/System"
-            && target_method_name == "registerNatives"
-            && target_descriptor == "()V"
-        {
-            // HotSpot uses this to register VM natives; Jay dispatches supported
-            // native behavior through explicit Rust shims, so there is no table to populate.
-            return Ok(());
+        if method.is_native() {
+            let arguments = self.pop_method_arguments(
+                caller,
+                &descriptor,
+                &format!("invokestatic target {target_name}"),
+            )?;
+            return self.invoke_native(
+                caller,
+                &target_class_name,
+                &target_method_name,
+                &target_descriptor,
+                None,
+                &arguments,
+            );
         }
 
-        if method.access_flags & 0x0100 != 0 || method.access_flags & 0x0400 != 0 {
+        if method.is_abstract() {
             return Err(JayError::new(format!(
-                "invokestatic target {target_name} must not be native or abstract"
+                "invokestatic target {target_name} must not be abstract"
             )));
         }
 
@@ -668,5 +687,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
             result?,
             &format!("invokestatic target {target_name}"),
         )
+    }
+}
+
+/// Maps array runtime types (`[I`, `[Ljava/lang/String;`) to `java/lang/Object`,
+/// the class whose methods they inherit; other class names pass through.
+pub(super) fn dispatch_class_name(class_name: &str) -> &str {
+    if class_name.starts_with('[') {
+        "java/lang/Object"
+    } else {
+        class_name
     }
 }

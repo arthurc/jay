@@ -6,6 +6,10 @@ use super::descriptors::ValueType;
 use super::value::Value;
 use crate::{JayError, JayResult};
 
+mod arrays;
+
+pub(super) use arrays::ArrayKind;
+
 const DEFAULT_GC_THRESHOLD: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +116,7 @@ impl PrimitiveElement {
 
 /// Storage for a primitive array. Elements are kept at their natural width so
 /// stores narrow and loads widen exactly as the JVM specifies.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) enum PrimitiveArray {
     Boolean(Vec<i8>),
     Char(Vec<u16>),
