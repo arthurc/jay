@@ -17,8 +17,8 @@ public class Main {
     }
 
     static void inner() {
-        int[] entries = new int[1];
-        System.out.println(entries.length);
+        int[][] grid = new int[2][2];
+        System.out.println(grid.length);
     }
 }
 "#,
@@ -34,7 +34,7 @@ public class Main {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("jay: unsupported bytecode 0xbc at pc 1"),
+        stderr.contains("jay: unsupported bytecode 0xc5 at pc 2"),
         "stderr missing base error:\n{stderr}"
     );
     assert!(
