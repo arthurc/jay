@@ -39,7 +39,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .heap
             .allocate_reference_array("[Ljava/lang/String;", program_args.len());
         for (index, argument) in program_args.iter().enumerate() {
-            let value = self.heap.allocate_string(argument.clone());
+            let value = self.new_java_string(argument.clone());
             self.heap
                 .store_array_reference(array, index, Value::Reference(value))?;
         }

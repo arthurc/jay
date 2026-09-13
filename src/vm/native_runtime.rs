@@ -53,15 +53,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
         };
 
         let reference = match value {
-            Value::Null => self.heap.allocate_string("null"),
+            Value::Null => self.new_java_string("null"),
             // String.valueOf(String) returns its argument unchanged.
-            Value::Reference(reference) if self.heap.string(*reference).is_ok() => *reference,
+            Value::Reference(reference) if self.is_java_string(*reference) => *reference,
             Value::Reference(reference) => {
                 // Keep the argument rooted while an interpreted toString() may run.
                 caller.stack.push(Value::Reference(*reference));
                 let text = self.reference_to_text(caller, *reference);
                 caller.pop()?;
-                self.heap.allocate_string(text?)
+                self.new_java_string(text?)
             }
             other => {
                 return Err(JayError::new(format!(
@@ -193,7 +193,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<ObjectRef> {
         let identity = self.heap.object_identity(receiver)?;
         let text = format!("{}@{identity:x}", receiver_class_name.replace('/', "."));
-        Ok(self.heap.allocate_string(text))
+        Ok(self.new_java_string(text))
     }
 
     pub(super) fn invoke_pattern_matches(
@@ -220,12 +220,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Err(JayError::new("Pattern.matches received null input"));
         };
 
-        let pattern = self.heap.string(*pattern)?;
+        let pattern = self.java_string(*pattern)?;
         let input = self
-            .heap
-            .string(*input)
+            .java_string(*input)
             .map_err(|_| JayError::new("Pattern.matches currently supports String input only"))?;
-        let matched = native::pattern_matches(pattern, input)?;
+        let matched = native::pattern_matches(&pattern, &input)?;
         caller.stack.push(Value::Int(if matched { 1 } else { 0 }));
         Ok(())
     }
@@ -264,9 +263,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Err(JayError::new("TimeZone.getTimeZone received null ID"));
         };
 
-        let requested_id = self.heap.string(*id)?.to_string();
+        let requested_id = self.java_string(*id)?;
         let time_zone = native::TimeZone::from_id(&requested_id);
-        let id_reference = self.heap.allocate_string(time_zone.id());
+        let id_reference = self.new_java_string(time_zone.id());
         let reference = self.heap.allocate_instance("java/util/TimeZone");
 
         self.heap.put_instance_field(
@@ -303,7 +302,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         receiver: ObjectRef,
     ) -> JayResult<()> {
         let fast_time = self.date_fast_time(receiver)?;
-        let reference = self.heap.allocate_string(native::date_to_string(fast_time));
+        let reference = self.new_java_string(native::date_to_string(fast_time));
         caller.stack.push(Value::Reference(reference));
         self.collect_if_needed(caller);
         Ok(())
@@ -328,7 +327,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let time_zone = self.simple_date_format_time_zone(receiver)?;
         let fast_time = self.date_fast_time(*date)?;
         let output = native::format_simple_date(&pattern, fast_time, time_zone)?;
-        let reference = self.heap.allocate_string(output);
+        let reference = self.new_java_string(output);
         caller.stack.push(Value::Reference(reference));
         self.collect_if_needed(caller);
         Ok(())
@@ -426,7 +425,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             "Ljava/lang/String;",
         );
         match self.heap.get_instance_field(formatter, &field)? {
-            Some(Value::Reference(reference)) => Ok(self.heap.string(reference)?.to_string()),
+            Some(Value::Reference(reference)) => Ok(self.java_string(reference)?),
             Some(Value::Null) | None => Err(JayError::new(
                 "SimpleDateFormat pattern has not been initialized",
             )),
@@ -459,7 +458,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .heap
             .get_instance_field(reference, &time_zone_id_field())?
         {
-            Some(Value::Reference(id)) => self.heap.string(id)?.to_string(),
+            Some(Value::Reference(id)) => self.java_string(id)?,
             Some(Value::Null) | None => {
                 return Err(JayError::new("TimeZone ID has not been initialized"));
             }

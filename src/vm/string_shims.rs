@@ -28,7 +28,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         receiver: ObjectRef,
         arguments: &[Value],
     ) -> JayResult<bool> {
-        let text = self.heap.string(receiver)?.to_string();
+        let text = self.java_string(receiver)?;
         let units = utf16(&text);
 
         let result = match (name, descriptor) {
@@ -44,7 +44,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             ("equals", "(Ljava/lang/Object;)Z") => {
                 let equal = match arguments.first() {
                     Some(Value::Reference(other)) => {
-                        self.heap.string(*other).ok() == Some(text.as_str())
+                        self.java_string(*other).ok().as_deref() == Some(text.as_str())
                     }
                     _ => false,
                 };
@@ -179,16 +179,16 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 from_utf16(self.heap.char_array_units(array)?)
             }
             ("java/lang/Integer", "parseInt", "(Ljava/lang/String;)I") => {
-                let reference = frame.pop_string_reference(&self.heap)?;
-                let digits = self.heap.string(reference)?;
-                let value = parse_java_int(digits)?;
+                let reference = self.pop_java_string(frame)?;
+                let digits = self.java_string(reference)?;
+                let value = parse_java_int(&digits)?;
                 frame.stack.push(Value::Int(value));
                 return Ok(true);
             }
             _ => return Ok(false),
         };
 
-        let reference = self.heap.allocate_string(text);
+        let reference = self.new_java_string(text);
         frame.stack.push(Value::Reference(reference));
         self.collect_if_needed(frame);
         Ok(true)
@@ -206,8 +206,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let text = match descriptor {
             "()V" => String::new(),
             "(Ljava/lang/String;)V" => {
-                let reference = frame.pop_string_reference(&self.heap)?;
-                self.heap.string(reference)?.to_string()
+                let reference = self.pop_java_string(frame)?;
+                self.java_string(reference)?
             }
             "([C)V" => {
                 let array = frame.pop_object_ref()?;
@@ -221,11 +221,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
     }
 
     fn allocate_text(&mut self, text: &str) -> Value {
-        Value::Reference(self.heap.allocate_string(text))
+        Value::Reference(self.new_java_string(text))
     }
 
     fn allocate_units(&mut self, units: &[u16]) -> Value {
-        Value::Reference(self.heap.allocate_string(from_utf16(units)))
+        Value::Reference(self.new_java_string(from_utf16(units)))
     }
 
     /// Reads a `String` argument, returning `None` for `null`.
@@ -237,9 +237,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<Option<String>> {
         match arguments.get(index) {
             Some(Value::Null) => Ok(None),
-            Some(Value::Reference(reference)) => {
-                Ok(Some(self.heap.string(*reference)?.to_string()))
-            }
+            Some(Value::Reference(reference)) => Ok(Some(self.java_string(*reference)?)),
             other => Err(JayError::new(format!(
                 "{target} expected a String argument, found {other:?}"
             ))),

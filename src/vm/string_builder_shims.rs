@@ -33,8 +33,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 String::new()
             }
             "(Ljava/lang/String;)V" => {
-                let reference = frame.pop_string_reference(&self.heap)?;
-                self.heap.string(reference)?.to_string()
+                let reference = self.pop_java_string(frame)?;
+                self.java_string(reference)?
             }
             "(Ljava/lang/CharSequence;)V" => {
                 let reference = frame.pop_object_ref()?;
@@ -93,7 +93,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             }
             ("toString", "()Ljava/lang/String;") => {
                 let text = self.heap.string_builder(receiver)?.to_string();
-                Value::Reference(self.heap.allocate_string(text))
+                Value::Reference(self.new_java_string(text))
             }
             ("length", "()I") => {
                 let length = self.heap.string_builder(receiver)?.encode_utf16().count();
@@ -151,8 +151,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
     /// Reads the text of a `CharSequence` argument, which in this VM is a
     /// `String` or a `StringBuilder`.
     fn char_sequence_text(&self, reference: ObjectRef) -> JayResult<String> {
-        if let Ok(text) = self.heap.string(reference) {
-            return Ok(text.to_string());
+        if self.is_java_string(reference) {
+            return self.java_string(reference);
         }
         Ok(self.heap.string_builder(reference)?.to_string())
     }

@@ -23,9 +23,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
         if method.class_name == "java/io/PrintStream" && method.name == "println" {
             return match method.descriptor {
                 "(Ljava/lang/String;)V" => {
-                    let reference = frame.pop_string_reference(&self.heap)?;
+                    let reference = self.pop_java_string(frame)?;
                     frame.pop_print_stream()?;
-                    let value = self.heap.string(reference)?;
+                    let value = self.java_string(reference)?;
                     writeln!(self.output, "{value}")?;
                     Ok(())
                 }
@@ -127,7 +127,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             let receiver = frame.pop_object_ref()?;
             let class_name = self.mirrored_class_name(receiver)?;
-            let name = self.heap.allocate_string(class_name.replace('/', "."));
+            let name = self.new_java_string(class_name.replace('/', "."));
             frame.stack.push(Value::Reference(name));
             self.collect_if_needed(frame);
             return Ok(());
@@ -454,7 +454,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         )?;
 
         let value = apply_string_concat_recipe(&recipe, &text_arguments)?;
-        let reference = self.heap.allocate_string(value);
+        let reference = self.new_java_string(value);
         frame.stack.push(Value::Reference(reference));
         self.collect_if_needed(frame);
         Ok(())

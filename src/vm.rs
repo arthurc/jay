@@ -14,6 +14,7 @@ mod resolution;
 mod runtime;
 mod string_builder_shims;
 mod string_shims;
+mod strings;
 mod value;
 
 use std::io::{self, Write};
