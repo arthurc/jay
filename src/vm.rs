@@ -1,6 +1,7 @@
 mod arithmetic;
 mod bytecode;
 mod descriptors;
+mod exceptions;
 mod fields;
 mod frame;
 mod heap;

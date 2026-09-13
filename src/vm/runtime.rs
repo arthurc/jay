@@ -12,21 +12,29 @@ use crate::classfile::ClassFile;
 use crate::{JayError, JayResult};
 
 impl<'a, W: Write> Interpreter<'a, W> {
+    /// Implements `checkcast`: `null` passes through, incompatible references
+    /// raise `ClassCastException`.
     pub(super) fn check_cast(
         &self,
         class_file: &ClassFile,
         frame: &mut Frame,
         index: u16,
     ) -> JayResult<()> {
-        let class_name = class_file.constant_pool.class_name(index)?;
-        let expected_type = descriptors::ValueType::Reference(class_name.to_string());
+        let expected = class_file.constant_pool.class_name(index)?;
         let value = frame.pop_reference()?;
-        self.validate_value_type(
-            &value,
-            &expected_type,
-            &format!("checkcast target {}", class_name.replace('/', ".")),
-            "checked",
-        )?;
+        if let Value::Reference(reference) = value {
+            let actual = self.reference_type_name(reference)?;
+            if !self.is_reference_compatible(&actual, expected)? {
+                return Err(JayError::fault(
+                    "java/lang/ClassCastException",
+                    Some(format!(
+                        "class {} cannot be cast to class {}",
+                        self.heap.type_name(reference)?,
+                        class_name_for_display(expected)
+                    )),
+                ));
+            }
+        }
         frame.stack.push(value);
         Ok(())
     }
@@ -175,8 +183,25 @@ impl<'a, W: Write> Interpreter<'a, W> {
     }
 }
 
-pub(super) fn checked_array_index(index: i32) -> JayResult<usize> {
-    usize::try_from(index).map_err(|_| JayError::new(format!("negative array index {index}")))
+/// Renders a constant-pool class name or array descriptor for a Java message.
+fn class_name_for_display(name: &str) -> String {
+    if name.starts_with('[') {
+        super::heap::reference_array_name(name)
+    } else {
+        name.replace('/', ".")
+    }
+}
+
+impl<'a, W: Write> Interpreter<'a, W> {
+    /// Validates an array index against the array's length, raising
+    /// `ArrayIndexOutOfBoundsException` with Java's message otherwise.
+    pub(super) fn checked_array_index(&self, array: ObjectRef, index: i32) -> JayResult<usize> {
+        let length = self.heap.array_length(array)?;
+        match usize::try_from(index) {
+            Ok(index) if index < length => Ok(index),
+            _ => Err(super::heap::array_index_fault(index, length)),
+        }
+    }
 }
 
 pub(super) fn apply_string_concat_recipe(recipe: &str, arguments: &[String]) -> JayResult<String> {

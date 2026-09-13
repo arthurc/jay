@@ -1306,10 +1306,9 @@ public class Main {
 
     assert!(!output.status.success(), "jay unexpectedly succeeded");
     assert!(String::from_utf8_lossy(&output.stdout).is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("cannot store java.lang.Integer in java.lang.String[]")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).starts_with(
+        "Exception in thread \"main\" java.lang.ArrayStoreException: java.lang.Integer\n"
+    ));
 }
 
 #[test]

@@ -90,20 +90,28 @@ pub(super) fn float_compare(left: f32, right: f32, nan_result: i32) -> i32 {
     }
 }
 
+/// The `ArithmeticException` Java raises for integer division by zero.
+fn division_by_zero() -> JayError {
+    JayError::fault(
+        "java/lang/ArithmeticException",
+        Some("/ by zero".to_string()),
+    )
+}
+
 fn int_shift_count(count: i32) -> u32 {
     (count & 0x1f) as u32
 }
 
 fn checked_int_division(left: i32, right: i32, op: fn(i32, i32) -> i32) -> JayResult<i32> {
     if right == 0 {
-        return Err(JayError::new("integer division by zero"));
+        return Err(division_by_zero());
     }
     Ok(op(left, right))
 }
 
 fn checked_long_division(left: i64, right: i64, op: fn(i64, i64) -> i64) -> JayResult<i64> {
     if right == 0 {
-        return Err(JayError::new("integer division by zero"));
+        return Err(division_by_zero());
     }
     Ok(op(left, right))
 }
@@ -129,19 +137,12 @@ mod tests {
     }
 
     #[test]
-    fn int_division_by_zero_is_an_error() {
-        assert!(
-            int_binary(0x6c, 1, 0)
-                .unwrap_err()
-                .to_string()
-                .contains("division by zero")
-        );
-        assert!(
-            int_binary(0x70, 1, 0)
-                .unwrap_err()
-                .to_string()
-                .contains("division by zero")
-        );
+    fn int_division_by_zero_is_an_arithmetic_exception_fault() {
+        for opcode in [0x6c, 0x70] {
+            let error = int_binary(opcode, 1, 0).unwrap_err();
+            assert_eq!(error.fault_class(), Some("java/lang/ArithmeticException"));
+            assert_eq!(error.fault_message(), Some("/ by zero"));
+        }
     }
 
     #[test]

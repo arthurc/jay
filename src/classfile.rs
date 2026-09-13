@@ -68,6 +68,28 @@ pub struct Code {
     pub max_stack: u16,
     pub max_locals: u16,
     pub bytes: Vec<u8>,
+    /// Exception handlers in class-file order, which is also dispatch priority order.
+    pub exception_table: Vec<ExceptionHandler>,
+}
+
+/// One entry of a method's exception table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExceptionHandler {
+    /// First bytecode offset covered by this handler (inclusive).
+    pub start_pc: u16,
+    /// End of the covered range (exclusive).
+    pub end_pc: u16,
+    /// Bytecode offset to jump to when the handler applies.
+    pub handler_pc: u16,
+    /// Internal name of the caught class, or `None` for a catch-all (`finally`).
+    pub catch_type: Option<String>,
+}
+
+impl ExceptionHandler {
+    /// Whether the handler covers a bytecode offset.
+    pub fn covers(&self, pc: usize) -> bool {
+        (self.start_pc as usize) <= pc && pc < (self.end_pc as usize)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -513,13 +535,31 @@ impl<'a> Parser<'a> {
         let bytes = self.read_bytes(code_length)?.to_vec();
 
         let exception_table_length = self.read_u2()? as usize;
-        self.skip(exception_table_length * 8)?;
+        let mut exception_table = Vec::with_capacity(exception_table_length);
+        for _ in 0..exception_table_length {
+            let start_pc = self.read_u2()?;
+            let end_pc = self.read_u2()?;
+            let handler_pc = self.read_u2()?;
+            let catch_type_index = self.read_u2()?;
+            let catch_type = if catch_type_index == 0 {
+                None
+            } else {
+                Some(constant_pool.class_name(catch_type_index)?.to_string())
+            };
+            exception_table.push(ExceptionHandler {
+                start_pc,
+                end_pc,
+                handler_pc,
+                catch_type,
+            });
+        }
         self.skip_attributes_named(constant_pool)?;
 
         Ok(Code {
             max_stack,
             max_locals,
             bytes,
+            exception_table,
         })
     }
 
@@ -683,6 +723,79 @@ mod tests {
                 .to_string()
                 .contains("unsupported class file major version 72; expected Java 27 or older")
         );
+    }
+
+    #[test]
+    fn parses_exception_table_entries_with_catch_types_and_catch_all() {
+        let bytes = class_with_exception_table();
+
+        let class_file = ClassFile::parse(&bytes).unwrap();
+        let code = class_file.methods[0].code.as_ref().unwrap();
+
+        assert_eq!(
+            code.exception_table,
+            [
+                ExceptionHandler {
+                    start_pc: 0,
+                    end_pc: 4,
+                    handler_pc: 7,
+                    catch_type: Some("java/lang/Object".to_string()),
+                },
+                ExceptionHandler {
+                    start_pc: 0,
+                    end_pc: 9,
+                    handler_pc: 9,
+                    catch_type: None,
+                },
+            ]
+        );
+        assert!(code.exception_table[0].covers(3));
+        assert!(!code.exception_table[0].covers(4));
+        assert_eq!(code.bytes.len(), 10);
+    }
+
+    /// `Empty extends Object` with one `void m()` whose Code has two handlers:
+    /// `catch Object` over 0..4 and a catch-all over 0..9.
+    fn class_with_exception_table() -> Vec<u8> {
+        let mut bytes = vec![
+            0xCA, 0xFE, 0xBA, 0xBE, // magic
+            0x00, 0x00, // minor
+            0x00, 0x41, // major 65
+            0x00, 0x08, // constant_pool_count
+            0x07, 0x00, 0x02, // #1 Class #2
+            0x01, 0x00, 0x05, b'E', b'm', b'p', b't', b'y', // #2 Utf8 Empty
+            0x07, 0x00, 0x04, // #3 Class #4
+            0x01, 0x00, 0x10, b'j', b'a', b'v', b'a', b'/', b'l', b'a', b'n', b'g', b'/', b'O',
+            b'b', b'j', b'e', b'c', b't', // #4 Utf8 java/lang/Object
+            0x01, 0x00, 0x01, b'm', // #5 Utf8 m
+            0x01, 0x00, 0x03, b'(', b')', b'V', // #6 Utf8 ()V
+            0x01, 0x00, 0x04, b'C', b'o', b'd', b'e', // #7 Utf8 Code
+            0x00, 0x21, // access_flags
+            0x00, 0x01, // this_class
+            0x00, 0x03, // super_class
+            0x00, 0x00, // interfaces_count
+            0x00, 0x00, // fields_count
+            0x00, 0x01, // methods_count
+            0x00, 0x08, // method access_flags (static)
+            0x00, 0x05, // name #5
+            0x00, 0x06, // descriptor #6
+            0x00, 0x01, // attributes_count
+            0x00, 0x07, // attribute name #7 Code
+        ];
+        let code_body: Vec<u8> = vec![
+            0x00, 0x01, // max_stack
+            0x00, 0x00, // max_locals
+            0x00, 0x00, 0x00, 0x0a, // code_length 10
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb1, // nops + return
+            0x00, 0x02, // exception_table_length
+            0x00, 0x00, 0x00, 0x04, 0x00, 0x07, 0x00, 0x03, // 0..4 -> 7 catch #3
+            0x00, 0x00, 0x00, 0x09, 0x00, 0x09, 0x00, 0x00, // 0..9 -> 9 catch-all
+            0x00, 0x00, // attributes_count
+        ];
+        bytes.extend_from_slice(&(code_body.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&code_body);
+        bytes.extend_from_slice(&[0x00, 0x00]); // class attributes_count
+        bytes
     }
 
     /// Minimal `Empty extends Object` class file bytes with the given major version.

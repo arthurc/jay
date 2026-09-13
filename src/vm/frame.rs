@@ -343,7 +343,7 @@ impl Frame {
     pub(super) fn pop_object_ref(&mut self) -> JayResult<ObjectRef> {
         match self.pop_reference()? {
             Value::Reference(reference) => Ok(reference),
-            Value::Null => Err(JayError::new("null reference on stack")),
+            Value::Null => Err(JayError::fault("java/lang/NullPointerException", None)),
             other => Err(JayError::new(format!(
                 "expected reference on stack, found {other:?}"
             ))),

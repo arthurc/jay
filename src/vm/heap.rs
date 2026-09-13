@@ -11,6 +11,18 @@ const DEFAULT_GC_THRESHOLD: usize = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ObjectRef(usize);
 
+impl ObjectRef {
+    /// The heap slot index, used to carry a reference through `JayError`.
+    pub(super) fn index(self) -> usize {
+        self.0
+    }
+
+    /// Rebuilds a reference from a slot index previously obtained from `index`.
+    pub(super) fn from_index(index: usize) -> Self {
+        Self(index)
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct Heap {
     objects: Vec<Option<HeapObject>>,
@@ -499,12 +511,9 @@ impl Heap {
     /// Loads one element of a primitive array, widened to `Int`, `Long`, or `Float`.
     pub(super) fn load_primitive(&self, reference: ObjectRef, index: usize) -> JayResult<Value> {
         match self.object(reference)?.kind {
-            ObjectKind::PrimitiveArray(ref array) => array.load(index).ok_or_else(|| {
-                JayError::new(format!(
-                    "array index {index} out of bounds for length {}",
-                    array.len()
-                ))
-            }),
+            ObjectKind::PrimitiveArray(ref array) => array
+                .load(index)
+                .ok_or_else(|| array_index_fault(index, array.len())),
             _ => Err(JayError::new(format!(
                 "expected primitive array reference, found {}",
                 self.type_name(reference)?
@@ -525,10 +534,7 @@ impl Heap {
                 if array.store(index, &value)? {
                     Ok(())
                 } else {
-                    Err(JayError::new(format!(
-                        "array index {index} out of bounds for length {}",
-                        array.len()
-                    )))
+                    Err(array_index_fault(index, array.len()))
                 }
             }
             _ => Err(JayError::new(format!(
@@ -545,10 +551,7 @@ impl Heap {
         match self.object(reference)?.kind {
             ObjectKind::ObjectArray { ref elements, .. } => {
                 let Some(value) = elements.get(index) else {
-                    return Err(JayError::new(format!(
-                        "array index {index} out of bounds for length {}",
-                        elements.len()
-                    )));
+                    return Err(array_index_fault(index, elements.len()));
                 };
                 Ok(value.clone())
             }
@@ -610,11 +613,10 @@ impl Heap {
                 None => return Err(JayError::new("array store value type is unavailable")),
             };
             if !is_reference_store_compatible(&actual, &descriptor) {
-                return Err(JayError::new(format!(
-                    "cannot store {} in {}",
-                    self.type_name(stored_reference)?,
-                    reference_array_name(&descriptor)
-                )));
+                return Err(JayError::fault(
+                    "java/lang/ArrayStoreException",
+                    Some(self.type_name(stored_reference)?),
+                ));
             }
         }
 
@@ -624,9 +626,7 @@ impl Heap {
             } => {
                 let length = elements.len();
                 let Some(slot) = elements.get_mut(index) else {
-                    return Err(JayError::new(format!(
-                        "array index {index} out of bounds for length {length}"
-                    )));
+                    return Err(array_index_fault(index, length));
                 };
                 *slot = value;
                 Ok(())
@@ -712,6 +712,14 @@ impl Heap {
             }
         }
     }
+}
+
+/// The `ArrayIndexOutOfBoundsException` fault for `index` in an array of `length`.
+pub(super) fn array_index_fault(index: impl std::fmt::Display, length: usize) -> JayError {
+    JayError::fault(
+        "java/lang/ArrayIndexOutOfBoundsException",
+        Some(format!("Index {index} out of bounds for length {length}")),
+    )
 }
 
 /// Renders an array descriptor such as `[Ljava/lang/String;` or `[[I` as Java source spelling.
@@ -815,7 +823,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("index 3 out of bounds for length 3")
+                .contains("Index 3 out of bounds for length 3")
         );
 
         let error = heap.store_primitive(array, 0, Value::Long(1)).unwrap_err();

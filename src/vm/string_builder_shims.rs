@@ -112,7 +112,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     .ok()
                     .and_then(|index| units.get(index).copied())
                     .ok_or_else(|| {
-                        JayError::new(format!("index {index},length {}", units.len()))
+                        JayError::fault(
+                            "java/lang/StringIndexOutOfBoundsException",
+                            Some(format!("index {index},length {}", units.len())),
+                        )
                     })?;
                 Value::Int(unit as i32)
             }
@@ -126,9 +129,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     return Err(JayError::new("StringBuilder.setLength expected an int"));
                 };
                 if *length < 0 {
-                    return Err(JayError::new(format!(
-                        "String index out of range: {length}"
-                    )));
+                    return Err(JayError::fault(
+                        "java/lang/StringIndexOutOfBoundsException",
+                        Some(format!("String index out of range: {length}")),
+                    ));
                 }
                 let buffer = self.heap.string_builder_mut(receiver)?;
                 let mut units = utf16(buffer);

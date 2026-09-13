@@ -33,7 +33,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let class_name = class_file.constant_pool.class_name(index)?;
         let length = frame.pop_int()?;
         if length < 0 {
-            return Err(JayError::new(format!("negative array length {length}")));
+            return Err(JayError::fault(
+                "java/lang/NegativeArraySizeException",
+                Some(length.to_string()),
+            ));
         }
 
         let descriptor = reference_array_descriptor(class_name);
@@ -50,7 +53,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let element = PrimitiveElement::from_atype(atype)?;
         let length = frame.pop_int()?;
         if length < 0 {
-            return Err(JayError::new(format!("negative array length {length}")));
+            return Err(JayError::fault(
+                "java/lang/NegativeArraySizeException",
+                Some(length.to_string()),
+            ));
         }
 
         let reference = self.heap.allocate_primitive_array(element, length as usize);

@@ -105,12 +105,16 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
 - Focused `Pattern.matches(String, CharSequence)` support for the regex constructs exercised by the integration tests, including `.`, `*`, `+`, exact repetition like `{4}`, digit escapes like `\d`, and simple character classes such as `[0-9]`
 - Focused date/time shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `LocalDateTime.now()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
+- Java exceptions: `throw`, `try`/`catch`/`finally`, multi-catch, handler selection by exception type through the class hierarchy, and propagation across interpreted frames; JDK exception constructors run as bytecode with `Throwable.fillInStackTrace(int)`, `Object.getClass()`, and `Class.getName()` shimmed so `getMessage()` and `toString()` work
+- VM faults surface as Java exceptions that can be caught: `NullPointerException`, `ArithmeticException` (`/ by zero`), `ArrayIndexOutOfBoundsException`, `ArrayStoreException`, `ClassCastException`, `NegativeArraySizeException`, `StringIndexOutOfBoundsException`, and `NumberFormatException`, with HotSpot-style messages
+- Uncaught exceptions print `Exception in thread "main" <class>: <message>` followed by the interpreted Java frames, and exit with a failure status
 - Class files with major versions 45 through 71 (Java 1.1 through Java 27)
 - Each class file is read and parsed once per run and shared by every call, field lookup, and hierarchy walk
 
 `double` values, multi-dimensional arrays, string interning, full collection semantics,
-general invokedynamic bootstrap execution, broad date formatting, general regex
-execution, and general native/JDK method execution are still unsupported. Unsupported bytecode or method shapes fail with an explicit error
+general invokedynamic bootstrap execution, lambdas, broad date formatting, general regex
+execution, `printStackTrace()`, stack-trace elements, helpful `NullPointerException`
+messages, and general native/JDK method execution are still unsupported. Unsupported bytecode or method shapes fail with an explicit `jay:` error
 and an interpreted Java stacktrace that names each active class, method
 descriptor, and bytecode program counter.
 

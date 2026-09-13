@@ -164,7 +164,7 @@ public class Main {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("array index 3 out of bounds for length 3"),
+        stderr.starts_with("Exception in thread \"main\" java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 3\n"),
         "stderr:\n{stderr}"
     );
 }

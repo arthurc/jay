@@ -12,7 +12,6 @@ use super::bytecode::{
 };
 use super::frame::Frame;
 use super::heap::{FieldKey, Heap, ObjectRef};
-use super::runtime::checked_array_index;
 use super::value::Value;
 use crate::classfile::{ClassFile, Code, Method};
 use crate::classpath::ClassResolver;
@@ -90,12 +89,26 @@ impl<'a, W: Write> Interpreter<'a, W> {
             let opcode_pc = pc;
             let opcode = read_u1(&code.bytes, &mut pc)
                 .map_err(|error| error.with_java_stack_frame(context.stack_frame(opcode_pc)))?;
-            let result = self
-                .execute_instruction(class_file, code, frame, &mut pc, opcode_pc, opcode)
-                .map_err(|error| error.with_java_stack_frame(context.stack_frame(opcode_pc)))?;
-            match result {
-                InstructionResult::Continue => {}
-                InstructionResult::Return(value) => return Ok(value),
+            match self.execute_instruction(class_file, code, frame, &mut pc, opcode_pc, opcode) {
+                Ok(InstructionResult::Continue) => {}
+                Ok(InstructionResult::Return(value)) => return Ok(value),
+                Err(error) if error.is_java_exception() => {
+                    let (exception, error) = self.exception_object(error)?;
+                    match self.find_handler(code, opcode_pc, exception)? {
+                        Some(handler_pc) => {
+                            // The handler starts with only the exception on the stack.
+                            frame.stack.clear();
+                            frame.stack.push(Value::Reference(exception));
+                            pc = handler_pc;
+                        }
+                        None => {
+                            return Err(error.with_java_stack_frame(context.stack_frame(opcode_pc)));
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Err(error.with_java_stack_frame(context.stack_frame(opcode_pc)));
+                }
             }
         }
 
@@ -331,6 +344,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
             }
             0xb0 => return Ok(InstructionResult::Return(Some(frame.pop_reference()?))),
             0xb1 => return Ok(InstructionResult::Return(None)),
+            0xbf => {
+                let exception = frame.pop_object_ref()?;
+                let display = self.exception_display(exception)?;
+                return Err(JayError::thrown(exception.index(), display));
+            }
             0xb2 => {
                 let index = read_u2(&code.bytes, pc)?;
                 self.get_static(class_file, frame, index)?;
@@ -418,56 +436,48 @@ impl<'a, W: Write> Interpreter<'a, W> {
             0x2e | 0x2f | 0x30 | 0x33 | 0x34 | 0x35 => {
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
-                let value = self
-                    .heap
-                    .load_primitive(reference, checked_array_index(index)?)?;
+                let index = self.checked_array_index(reference, index)?;
+                let value = self.heap.load_primitive(reference, index)?;
                 frame.stack.push(value);
             }
             0x32 => {
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
-                let value = self
-                    .heap
-                    .load_array_reference(reference, checked_array_index(index)?)?;
+                let index = self.checked_array_index(reference, index)?;
+                let value = self.heap.load_array_reference(reference, index)?;
                 frame.stack.push(value);
             }
             0x4f | 0x54 | 0x55 | 0x56 => {
                 let value = frame.pop_int()?;
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
-                self.heap.store_primitive(
-                    reference,
-                    checked_array_index(index)?,
-                    Value::Int(value),
-                )?;
+                let index = self.checked_array_index(reference, index)?;
+                self.heap
+                    .store_primitive(reference, index, Value::Int(value))?;
             }
             0x50 => {
                 let value = frame.pop_long()?;
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
-                self.heap.store_primitive(
-                    reference,
-                    checked_array_index(index)?,
-                    Value::Long(value),
-                )?;
+                let index = self.checked_array_index(reference, index)?;
+                self.heap
+                    .store_primitive(reference, index, Value::Long(value))?;
             }
             0x51 => {
                 let value = frame.pop_float()?;
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
-                self.heap.store_primitive(
-                    reference,
-                    checked_array_index(index)?,
-                    Value::Float(value),
-                )?;
+                let index = self.checked_array_index(reference, index)?;
+                self.heap
+                    .store_primitive(reference, index, Value::Float(value))?;
             }
             0x53 => {
                 let value = frame.pop_reference()?;
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
+                let index = self.checked_array_index(reference, index)?;
                 self.validate_reference_array_store(reference, &value)?;
-                self.heap
-                    .store_array_reference(reference, checked_array_index(index)?, value)?;
+                self.heap.store_array_reference(reference, index, value)?;
             }
             _ => {
                 return Err(JayError::new(format!(
@@ -501,11 +511,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Ok(());
         }
 
-        Err(JayError::new(format!(
-            "cannot store {} in {}",
-            self.heap.type_name(*stored_reference)?,
-            reference_array_name(&descriptor)
-        )))
+        Err(JayError::fault(
+            "java/lang/ArrayStoreException",
+            Some(self.heap.type_name(*stored_reference)?),
+        ))
     }
 
     /// Implements `instanceof`: pushes 1 when the popped reference is non-null
@@ -585,12 +594,4 @@ impl<'a, W: Write> Interpreter<'a, W> {
 /// Extracts `java/lang/String` from the array component `Ljava/lang/String;`.
 fn strip_class_component(component: &str) -> Option<&str> {
     component.strip_prefix('L')?.strip_suffix(';')
-}
-
-fn reference_array_name(descriptor: &str) -> String {
-    descriptor
-        .strip_prefix("[L")
-        .and_then(|descriptor| descriptor.strip_suffix(';'))
-        .map(|class_name| format!("{}[]", class_name.replace('/', ".")))
-        .unwrap_or_else(|| descriptor.replace('/', "."))
 }

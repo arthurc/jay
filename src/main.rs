@@ -8,7 +8,11 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("jay: {error}");
+            if error.is_java_exception() {
+                eprintln!("Exception in thread \"main\" {error}");
+            } else {
+                eprintln!("jay: {error}");
+            }
             for frame in error.java_stack_trace() {
                 eprintln!(
                     "  at {}.{}{} (pc {})",

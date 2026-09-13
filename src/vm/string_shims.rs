@@ -292,19 +292,23 @@ fn checked_unit(units: &[u16], index: i32) -> JayResult<u16> {
         .ok()
         .and_then(|index| units.get(index).copied())
         .ok_or_else(|| {
-            JayError::new(format!(
-                "Index {index} out of bounds for length {}",
-                units.len()
-            ))
+            JayError::fault(
+                "java/lang/StringIndexOutOfBoundsException",
+                Some(format!(
+                    "Index {index} out of bounds for length {}",
+                    units.len()
+                )),
+            )
         })
 }
 
 fn checked_slice(units: &[u16], begin: i32, end: i32) -> JayResult<&[u16]> {
     let length = units.len() as i32;
     if begin < 0 || end > length || begin > end {
-        return Err(JayError::new(format!(
-            "begin {begin}, end {end}, length {length}"
-        )));
+        return Err(JayError::fault(
+            "java/lang/StringIndexOutOfBoundsException",
+            Some(format!("begin {begin}, end {end}, length {length}")),
+        ));
     }
     Ok(&units[begin as usize..end as usize])
 }
@@ -368,12 +372,16 @@ fn parse_java_int(digits: &str) -> JayResult<i32> {
         .strip_prefix('-')
         .or_else(|| digits.strip_prefix('+'))
         .unwrap_or(digits);
+    let invalid = || {
+        JayError::fault(
+            "java/lang/NumberFormatException",
+            Some(format!("For input string: \"{digits}\"")),
+        )
+    };
     if body.is_empty() || !body.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(JayError::new(format!("For input string: \"{digits}\"")));
+        return Err(invalid());
     }
-    digits
-        .parse::<i32>()
-        .map_err(|_| JayError::new(format!("For input string: \"{digits}\"")))
+    digits.parse::<i32>().map_err(|_| invalid())
 }
 
 #[cfg(test)]
