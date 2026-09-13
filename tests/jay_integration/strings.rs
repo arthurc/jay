@@ -181,3 +181,71 @@ public class Main {
         "stderr:\n{stderr}"
     );
 }
+
+#[test]
+fn runs_string_builder_appends() {
+    let stdout = run_main(
+        "string-builder-appends",
+        r#"
+public class Main {
+    static int number = 7;
+    static long big = 1L << 40;
+
+    public static void main(String[] args) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("a").append(number).append('c').append(big).append(number > 1);
+        builder.append((Object) null).append(Integer.valueOf(3));
+        System.out.println(builder.toString());
+        System.out.println(builder.length());
+        System.out.println(builder.charAt(1));
+        System.out.println(builder);
+        System.out.println("value: " + builder);
+        StringBuilder seeded = new StringBuilder("seed");
+        seeded.append(new StringBuilder("ling"));
+        System.out.println(seeded.reverse());
+        seeded.setLength(2);
+        System.out.println(seeded.toString());
+        System.out.println(new StringBuilder(16).length());
+    }
+}
+"#,
+    );
+
+    assert_eq!(
+        stdout,
+        "a7c1099511627776truenull3\n25\n7\na7c1099511627776truenull3\nvalue: a7c1099511627776truenull3\ngnildees\ngn\n0\n"
+    );
+}
+
+#[test]
+fn string_builder_survives_garbage_collection_and_passes_between_methods() {
+    let stdout = run_main(
+        "string-builder-gc",
+        r#"
+public class Main {
+    static void fill(StringBuilder target, int count) {
+        for (int i = 0; i < count; i++) {
+            target.append(i).append(",");
+        }
+    }
+
+    static String describe(Object value) {
+        return "[" + value + "]";
+    }
+
+    public static void main(String[] args) {
+        StringBuilder builder = new StringBuilder();
+        fill(builder, 12);
+        System.out.println(builder.toString());
+        System.out.println(describe(builder));
+        System.out.println(builder.append(new Main()).length() > 25);
+    }
+}
+"#,
+    );
+
+    assert_eq!(
+        stdout,
+        "0,1,2,3,4,5,6,7,8,9,10,11,\n[0,1,2,3,4,5,6,7,8,9,10,11,]\ntrue\n"
+    );
+}

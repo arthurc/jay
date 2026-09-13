@@ -48,8 +48,16 @@ pub(super) enum ReturnType {
 }
 
 /// Runtime values currently accepted in method descriptors.
+///
+/// `Boolean`, `Byte`, `Char`, and `Short` are carried as `Value::Int` at
+/// runtime exactly as the JVM does; they are kept distinct here so callers
+/// that format values (string concatenation, `println`) can tell them apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ValueType {
+    Boolean,
+    Byte,
+    Char,
+    Short,
     Int,
     Float,
     Long,
@@ -60,11 +68,27 @@ pub(super) enum ValueType {
 impl ValueType {
     pub(super) fn name(&self) -> String {
         match self {
+            ValueType::Boolean => "boolean".to_string(),
+            ValueType::Byte => "byte".to_string(),
+            ValueType::Char => "char".to_string(),
+            ValueType::Short => "short".to_string(),
             ValueType::Int => "int".to_string(),
             ValueType::Float => "float".to_string(),
             ValueType::Long => "long".to_string(),
             ValueType::Reference(class_name) => class_name.replace('/', "."),
         }
+    }
+
+    /// True for every type the JVM stores in an `int` operand slot.
+    pub(super) fn is_int_like(&self) -> bool {
+        matches!(
+            self,
+            ValueType::Boolean
+                | ValueType::Byte
+                | ValueType::Char
+                | ValueType::Short
+                | ValueType::Int
+        )
     }
 
     pub(super) fn is_reference_to(&self, class_name: &str) -> bool {
@@ -132,12 +156,17 @@ pub(super) fn parse_field_descriptor(descriptor: &str) -> JayResult<FieldType> {
 }
 
 fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueType, &'a str)> {
-    if let Some(remaining) = input.strip_prefix('I') {
-        return Ok((ValueType::Int, remaining));
-    }
-
-    if let Some(remaining) = input.strip_prefix(['Z', 'B', 'C', 'S']) {
-        return Ok((ValueType::Int, remaining));
+    let int_like = [
+        ('I', ValueType::Int),
+        ('Z', ValueType::Boolean),
+        ('B', ValueType::Byte),
+        ('C', ValueType::Char),
+        ('S', ValueType::Short),
+    ];
+    for (letter, value_type) in int_like {
+        if let Some(remaining) = input.strip_prefix(letter) {
+            return Ok((value_type, remaining));
+        }
     }
 
     if let Some(remaining) = input.strip_prefix('F') {
@@ -306,16 +335,23 @@ mod tests {
     fn parses_boolean_method_descriptors_as_int_values() {
         let descriptor = MethodDescriptor::parse("(Z)Z").unwrap();
 
-        assert_eq!(descriptor.parameter_types, vec![ValueType::Int]);
-        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Int));
+        assert_eq!(descriptor.parameter_types, vec![ValueType::Boolean]);
+        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Boolean));
 
         let descriptor = MethodDescriptor::parse("(BCS)C").unwrap();
 
         assert_eq!(
             descriptor.parameter_types,
-            vec![ValueType::Int, ValueType::Int, ValueType::Int]
+            vec![ValueType::Byte, ValueType::Char, ValueType::Short]
         );
-        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Int));
+        assert_eq!(descriptor.return_type, ReturnType::Type(ValueType::Char));
+        assert!(
+            descriptor
+                .parameter_types
+                .iter()
+                .all(ValueType::is_int_like)
+        );
+        assert!(!ValueType::Long.is_int_like());
     }
 
     #[test]

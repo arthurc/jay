@@ -37,6 +37,8 @@ enum ObjectKind {
         elements: Vec<Value>,
     },
     PrimitiveArray(PrimitiveArray),
+    /// A `java.lang.StringBuilder` backed by a native buffer instead of the JDK's `byte[]`.
+    StringBuilder(String),
 }
 
 /// Element type of a primitive array, as encoded by the `newarray` `atype` operand.
@@ -336,6 +338,52 @@ impl Heap {
                 "expected String reference, found {}",
                 array.element().array_name()
             ))),
+            ObjectKind::StringBuilder(_) => Err(JayError::new(
+                "expected String reference, found java.lang.StringBuilder",
+            )),
+        }
+    }
+
+    /// Reads the current contents of a `StringBuilder`.
+    pub(super) fn string_builder(&self, reference: ObjectRef) -> JayResult<&str> {
+        match self.object(reference)?.kind {
+            ObjectKind::StringBuilder(ref value) => Ok(value),
+            _ => Err(JayError::new(format!(
+                "expected StringBuilder reference, found {}",
+                self.type_name(reference)?
+            ))),
+        }
+    }
+
+    /// Mutably borrows the buffer of a `StringBuilder`.
+    pub(super) fn string_builder_mut(&mut self, reference: ObjectRef) -> JayResult<&mut String> {
+        let type_name = self.type_name(reference)?;
+        match self.object_mut(reference)?.kind {
+            ObjectKind::StringBuilder(ref mut value) => Ok(value),
+            _ => Err(JayError::new(format!(
+                "expected StringBuilder reference, found {type_name}"
+            ))),
+        }
+    }
+
+    /// Turns a freshly allocated `java.lang.StringBuilder` instance into a native buffer.
+    pub(super) fn replace_with_string_builder(
+        &mut self,
+        reference: ObjectRef,
+        value: impl Into<String>,
+    ) -> JayResult<()> {
+        let object = self.object_mut(reference)?;
+        match object.kind {
+            ObjectKind::Instance { ref class_name, .. }
+                if class_name == "java/lang/StringBuilder" =>
+            {
+                object.kind = ObjectKind::StringBuilder(value.into());
+                Ok(())
+            }
+            _ => Err(JayError::new(format!(
+                "expected uninitialized StringBuilder instance, found {}",
+                self.type_name(reference)?
+            ))),
         }
     }
 
@@ -351,6 +399,9 @@ impl Heap {
             ObjectKind::PrimitiveArray(ref array) => Ok(Some(ValueType::Reference(
                 array.element().array_descriptor().to_string(),
             ))),
+            ObjectKind::StringBuilder(_) => Ok(Some(ValueType::Reference(
+                "java/lang/StringBuilder".to_string(),
+            ))),
         }
     }
 
@@ -360,6 +411,7 @@ impl Heap {
             ObjectKind::Instance { ref class_name, .. } => Ok(class_name.replace('/', ".")),
             ObjectKind::ObjectArray { ref descriptor, .. } => Ok(reference_array_name(descriptor)),
             ObjectKind::PrimitiveArray(ref array) => Ok(array.element().array_name().to_string()),
+            ObjectKind::StringBuilder(_) => Ok("java.lang.StringBuilder".to_string()),
         }
     }
 
@@ -377,6 +429,7 @@ impl Heap {
                 "expected instance reference, found {}",
                 array.element().array_name()
             ))),
+            ObjectKind::StringBuilder(_) => Ok("java/lang/StringBuilder"),
         }
     }
 
@@ -402,6 +455,9 @@ impl Heap {
                 "expected instance reference for putfield, found {}",
                 array.element().array_name()
             ))),
+            ObjectKind::StringBuilder(_) => Err(JayError::new(
+                "expected instance reference for putfield, found java.lang.StringBuilder",
+            )),
         }
     }
 
@@ -423,6 +479,9 @@ impl Heap {
                 "expected instance reference for getfield, found {}",
                 array.element().array_name()
             ))),
+            ObjectKind::StringBuilder(_) => Err(JayError::new(
+                "expected instance reference for getfield, found java.lang.StringBuilder",
+            )),
         }
     }
 
@@ -630,7 +689,7 @@ impl Heap {
                 ObjectKind::ObjectArray { ref elements, .. } => {
                     elements.iter().filter_map(Value::object_ref).collect()
                 }
-                ObjectKind::PrimitiveArray(_) => Vec::new(),
+                ObjectKind::PrimitiveArray(_) | ObjectKind::StringBuilder(_) => Vec::new(),
             }
         };
 
@@ -810,6 +869,25 @@ mod tests {
             reference_array_name("[[Ljava/lang/String;"),
             "java.lang.String[][]"
         );
+    }
+
+    #[test]
+    fn string_builder_replaces_instance_and_reports_its_class() {
+        let mut heap = Heap::new();
+        let builder = heap.allocate_instance("java/lang/StringBuilder");
+        heap.replace_with_string_builder(builder, "ab").unwrap();
+        heap.string_builder_mut(builder).unwrap().push('c');
+
+        assert_eq!(heap.string_builder(builder).unwrap(), "abc");
+        assert_eq!(
+            heap.instance_class_name(builder).unwrap(),
+            "java/lang/StringBuilder"
+        );
+        assert_eq!(heap.type_name(builder).unwrap(), "java.lang.StringBuilder");
+        assert!(heap.string(builder).is_err());
+
+        let plain = heap.allocate_instance("example/Empty");
+        assert!(heap.replace_with_string_builder(plain, "").is_err());
     }
 
     #[test]

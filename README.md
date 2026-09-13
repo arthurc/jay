@@ -94,10 +94,12 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
 - Private instance method calls invoked with `invokevirtual` resolve to the declaring class (no subclass override dispatch)
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
 - Basic `HashMap<String, Integer>` insertion and entry-set iteration paths used by the integration tests
-- Limited Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
+- Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
 - `String` instance methods implemented natively over UTF-16 code units: `length`, `isEmpty`, `charAt`, `equals`, `equalsIgnoreCase`, `compareTo`, `hashCode`, `toString`, `contains`, `startsWith`, `endsWith`, `indexOf` (char and `String`, with and without a start index), `lastIndexOf`, `substring`, `trim`, `toUpperCase`, `toLowerCase`, `concat`, `replace` (char and `CharSequence`), and `toCharArray`
 - `String` constructors `String()`, `String(String)`, and `String(char[])`, plus `String.valueOf` for `int`, `long`, `char`, `boolean`, and `char[]`, `Integer.toString(int)`, `Long.toString(long)`, and `Integer.parseInt(String)`
 - `switch` on `String` values (javac's `hashCode` + `equals` lowering)
+- `StringBuilder` backed by a native buffer: constructors `()`, `(int)`, `(String)`, `(CharSequence)`, `append` for `String`, `Object`, `CharSequence`, `int`, `long`, `float`, `char`, and `boolean`, plus `toString`, `length`, `isEmpty`, `charAt`, `reverse`, and `setLength`
+- String concatenation and `println(Object)` format `char`, `boolean`, `long`, `float`, `Integer`, `StringBuilder`, and arbitrary objects through their interpreted `toString()`
 - `byte`, `char`, and `short` fields, parameters, and return values, carried as `int` values
 - Focused `String.valueOf(Object)` behavior with `null` handling, `Integer`/`String` fast paths, and virtual `toString()` fallback for general objects, VM-side default `Object.toString()` identity formatting, and array receivers via `Object`-style formatting
 - Focused `Pattern.matches(String, CharSequence)` support for the regex constructs exercised by the integration tests, including `.`, `*`, `+`, exact repetition like `{4}`, digit escapes like `\d`, and simple character classes such as `[0-9]`

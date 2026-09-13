@@ -11,6 +11,7 @@ mod native;
 mod native_runtime;
 mod resolution;
 mod runtime;
+mod string_builder_shims;
 mod string_shims;
 mod value;
 

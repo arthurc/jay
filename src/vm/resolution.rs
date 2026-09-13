@@ -184,7 +184,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         expected: &descriptors::ValueType,
     ) -> JayResult<bool> {
         match (actual, expected) {
-            (descriptors::ValueType::Int, descriptors::ValueType::Int) => Ok(true),
+            (actual, expected) if actual.is_int_like() && expected.is_int_like() => Ok(true),
             (descriptors::ValueType::Float, descriptors::ValueType::Float) => Ok(true),
             (descriptors::ValueType::Long, descriptors::ValueType::Long) => Ok(true),
             (

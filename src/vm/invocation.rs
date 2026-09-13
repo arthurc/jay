@@ -32,7 +32,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 "(Ljava/lang/Object;)V" => {
                     let value = frame.pop_reference()?;
                     frame.pop_print_stream()?;
-                    let text = self.println_object_text(value)?;
+                    // Keep the value rooted while an interpreted toString() may run.
+                    frame.stack.push(value.clone());
+                    let object_type = ValueType::Reference("java/lang/Object".to_string());
+                    let text = self.value_to_text(frame, &object_type, &value)?;
+                    frame.pop()?;
                     writeln!(self.output, "{text}")?;
                     Ok(())
                 }
@@ -131,6 +135,17 @@ impl<'a, W: Write> Interpreter<'a, W> {
             && receiver_class_name == "java/util/Date"
         {
             return self.invoke_date_to_string(frame, receiver);
+        }
+        if receiver_class_name == "java/lang/StringBuilder"
+            && self.try_invoke_string_builder_method(
+                frame,
+                &target_method_name,
+                &target_descriptor,
+                receiver,
+                &arguments,
+            )?
+        {
+            return Ok(());
         }
         if receiver_class_name == "java/lang/String"
             && self.try_invoke_string_method(
@@ -271,6 +286,12 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Ok(());
         }
 
+        if target_class_name == "java/lang/StringBuilder"
+            && self.try_invoke_string_builder_constructor(caller, &target_descriptor)?
+        {
+            return Ok(());
+        }
+
         let target_class_file = self.load_class_file(&target_class_name)?;
         let method = target_class_file
             .find_method(&target_method_name, &target_descriptor)
@@ -375,7 +396,19 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         };
         let recipe = class_file.constant_pool.string(*recipe_index)?.to_string();
-        let arguments = self.pop_method_arguments(
+        // Format the arguments while they are still on the operand stack so
+        // they stay rooted if an interpreted toString() triggers a collection.
+        let argument_count = descriptor.parameter_types.len();
+        let stack_len = frame.stack.len();
+        if stack_len < argument_count {
+            return Err(JayError::new("operand stack underflow"));
+        }
+        let mut text_arguments = Vec::with_capacity(argument_count);
+        for (offset, parameter_type) in descriptor.parameter_types.iter().enumerate() {
+            let value = frame.stack[stack_len - argument_count + offset].clone();
+            text_arguments.push(self.value_to_text(frame, parameter_type, &value)?);
+        }
+        self.pop_method_arguments(
             frame,
             &descriptor,
             &format!(
@@ -383,10 +416,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 dynamic.name, dynamic.descriptor
             ),
         )?;
-        let mut text_arguments = Vec::with_capacity(arguments.len());
-        for argument in arguments {
-            text_arguments.push(self.string_concat_argument(argument)?);
-        }
 
         let value = apply_string_concat_recipe(&recipe, &text_arguments)?;
         let reference = self.heap.allocate_string(value);

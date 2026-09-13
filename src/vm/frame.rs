@@ -361,7 +361,11 @@ impl Frame {
 
     pub(super) fn pop_value_of_type(&mut self, value_type: &ValueType) -> JayResult<Value> {
         match value_type {
-            ValueType::Int => Ok(Value::Int(self.pop_int()?)),
+            ValueType::Boolean
+            | ValueType::Byte
+            | ValueType::Char
+            | ValueType::Short
+            | ValueType::Int => Ok(Value::Int(self.pop_int()?)),
             ValueType::Float => Ok(Value::Float(self.pop_float()?)),
             ValueType::Long => Ok(Value::Long(self.pop_long()?)),
             ValueType::Reference(_) => self.pop_reference(),
