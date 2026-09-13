@@ -153,7 +153,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
     ) -> JayResult<String> {
         let class_name = self.reference_type_name(reference)?;
         match class_name.as_str() {
-            "java/lang/String" => Ok(self.heap.string(reference)?.to_string()),
+            "java/lang/String" => Ok(self.java_string(reference)?),
             "java/lang/StringBuilder" => Ok(self.heap.string_builder(reference)?.to_string()),
             "java/lang/Integer" => Ok(self.boxed_integer_value(reference)?.to_string()),
             "java/time/LocalDateTime" => Ok(native::local_date_time_to_string(
@@ -161,7 +161,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )),
             _ => {
                 let text = self.invoke_reference_to_string(frame, reference)?;
-                Ok(self.heap.string(text)?.to_string())
+                Ok(self.java_string(text)?)
             }
         }
     }

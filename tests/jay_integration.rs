@@ -33,3 +33,6 @@ mod arrays;
 
 #[path = "jay_integration/strings.rs"]
 mod strings;
+
+#[path = "jay_integration/natives.rs"]
+mod natives;

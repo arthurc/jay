@@ -25,6 +25,8 @@ pub(super) struct Interpreter<'a, W: Write> {
     pub(super) static_fields: HashMap<FieldKey, Value>,
     /// Heap-allocated `java.lang.Class` mirrors loaded by class literals.
     pub(super) class_mirrors: HashMap<String, ObjectRef>,
+    /// Canonical `String` objects for literals and `String.intern()`, keyed by text.
+    pub(super) interned_strings: HashMap<String, ObjectRef>,
     pub(super) initialized_classes: HashSet<String>,
     pub(super) initializing_classes: HashSet<String>,
     /// Parsed class files keyed by internal name, so each class is parsed once per run.
@@ -70,6 +72,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             saved_roots: Vec::new(),
             static_fields: HashMap::new(),
             class_mirrors: HashMap::new(),
+            interned_strings: HashMap::new(),
             initialized_classes: HashSet::new(),
             initializing_classes: HashSet::new(),
             class_cache: RefCell::new(HashMap::new()),
@@ -495,7 +498,23 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Ok(());
         };
 
-        let actual = self.reference_type_name(*stored_reference)?;
+        if self.is_array_store_compatible(array, *stored_reference)? {
+            return Ok(());
+        }
+
+        Err(JayError::fault(
+            "java/lang/ArrayStoreException",
+            Some(self.heap.type_name(*stored_reference)?),
+        ))
+    }
+
+    /// Checks whether `stored_reference` may be stored into the reference array `array`.
+    pub(super) fn is_array_store_compatible(
+        &self,
+        array: ObjectRef,
+        stored_reference: ObjectRef,
+    ) -> JayResult<bool> {
+        let actual = self.reference_type_name(stored_reference)?;
         let descriptor = self.heap.array_descriptor(array)?.to_string();
         let Some(expected_component) = descriptor.strip_prefix('[') else {
             return Err(JayError::new(format!(
@@ -507,14 +526,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .and_then(|component| component.strip_suffix(';'))
             .unwrap_or(expected_component);
 
-        if self.is_reference_compatible(&actual, expected)? {
-            return Ok(());
-        }
-
-        Err(JayError::fault(
-            "java/lang/ArrayStoreException",
-            Some(self.heap.type_name(*stored_reference)?),
-        ))
+        self.is_reference_compatible(&actual, expected)
     }
 
     /// Implements `instanceof`: pushes 1 when the popped reference is non-null

@@ -1,7 +1,7 @@
 //! Stack frame storage for local variables and operand stack operations.
 
 use super::descriptors::{FieldType, ValueType};
-use super::heap::{Heap, ObjectRef};
+use super::heap::ObjectRef;
 use super::value::Value;
 use crate::{JayError, JayResult};
 
@@ -301,18 +301,6 @@ impl Frame {
         }
     }
 
-    pub(super) fn pop_string_reference(&mut self, heap: &Heap) -> JayResult<ObjectRef> {
-        match self.pop()? {
-            Value::Reference(reference) => {
-                let _ = heap.string(reference)?;
-                Ok(reference)
-            }
-            other => Err(JayError::new(format!(
-                "expected string on stack, found {other:?}"
-            ))),
-        }
-    }
-
     pub(super) fn pop_int(&mut self) -> JayResult<i32> {
         match self.pop()? {
             Value::Int(value) => Ok(value),
@@ -410,22 +398,23 @@ fn value_local_width(value: &Value) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vm::heap::Heap;
 
     #[test]
     fn garbage_collection_keeps_frame_local_and_stack_references() {
         let mut heap = Heap::new();
-        let local = heap.allocate_string("local");
-        let stack = heap.allocate_string("stack");
-        let dropped = heap.allocate_string("dropped");
+        let local = heap.allocate_instance("example/Local");
+        let stack = heap.allocate_instance("example/Stack");
+        let dropped = heap.allocate_instance("example/Dropped");
         let mut frame = Frame::new(1);
         frame.locals[0] = Value::Reference(local);
         frame.stack.push(Value::Reference(stack));
 
         heap.collect(frame.roots());
 
-        assert_eq!(heap.string(local).unwrap(), "local");
-        assert_eq!(heap.string(stack).unwrap(), "stack");
-        assert!(heap.string(dropped).is_err());
+        assert_eq!(heap.type_name(local).unwrap(), "example.Local");
+        assert_eq!(heap.type_name(stack).unwrap(), "example.Stack");
+        assert!(heap.type_name(dropped).is_err());
     }
 
     #[test]

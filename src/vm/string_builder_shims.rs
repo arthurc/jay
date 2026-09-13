@@ -12,7 +12,6 @@ use super::descriptors::ValueType;
 use super::frame::Frame;
 use super::heap::ObjectRef;
 use super::interpreter::Interpreter;
-use super::string_shims::{from_utf16, utf16};
 use super::value::Value;
 use crate::{JayError, JayResult};
 
@@ -33,8 +32,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 String::new()
             }
             "(Ljava/lang/String;)V" => {
-                let reference = frame.pop_string_reference(&self.heap)?;
-                self.heap.string(reference)?.to_string()
+                let reference = self.pop_java_string(frame)?;
+                self.java_string(reference)?
             }
             "(Ljava/lang/CharSequence;)V" => {
                 let reference = frame.pop_object_ref()?;
@@ -93,7 +92,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             }
             ("toString", "()Ljava/lang/String;") => {
                 let text = self.heap.string_builder(receiver)?.to_string();
-                Value::Reference(self.heap.allocate_string(text))
+                Value::Reference(self.new_java_string(text)?)
             }
             ("length", "()I") => {
                 let length = self.heap.string_builder(receiver)?.encode_utf16().count();
@@ -107,7 +106,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 let Some(Value::Int(index)) = arguments.first() else {
                     return Err(JayError::new("StringBuilder.charAt expected an int"));
                 };
-                let units = utf16(self.heap.string_builder(receiver)?);
+                let units: Vec<u16> = self.heap.string_builder(receiver)?.encode_utf16().collect();
                 let unit = usize::try_from(*index)
                     .ok()
                     .and_then(|index| units.get(index).copied())
@@ -135,9 +134,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     ));
                 }
                 let buffer = self.heap.string_builder_mut(receiver)?;
-                let mut units = utf16(buffer);
+                let mut units: Vec<u16> = buffer.encode_utf16().collect();
                 units.resize(*length as usize, 0);
-                *buffer = from_utf16(&units);
+                *buffer = String::from_utf16_lossy(&units);
                 return Ok(true);
             }
             _ => return Ok(false),
@@ -151,8 +150,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
     /// Reads the text of a `CharSequence` argument, which in this VM is a
     /// `String` or a `StringBuilder`.
     fn char_sequence_text(&self, reference: ObjectRef) -> JayResult<String> {
-        if let Ok(text) = self.heap.string(reference) {
-            return Ok(text.to_string());
+        if self.is_java_string(reference) {
+            return self.java_string(reference);
         }
         Ok(self.heap.string_builder(reference)?.to_string())
     }

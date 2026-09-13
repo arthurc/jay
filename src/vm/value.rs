@@ -60,7 +60,7 @@ mod tests {
     #[test]
     fn string_value_type_is_carried_by_references() {
         let mut heap = Heap::new();
-        let reference = heap.allocate_string("value");
+        let reference = heap.allocate_instance("java/lang/String");
 
         assert_eq!(
             Value::Reference(reference).value_type(&heap).unwrap(),

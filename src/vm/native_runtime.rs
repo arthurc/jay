@@ -35,46 +35,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Ok(())
     }
 
-    pub(super) fn invoke_string_value_of_object(
-        &mut self,
-        caller: &mut Frame,
-        descriptor: &MethodDescriptor,
-        target_name: &str,
-    ) -> JayResult<()> {
-        let arguments = self.pop_method_arguments(
-            caller,
-            descriptor,
-            &format!("invokestatic target {target_name}"),
-        )?;
-        let [value] = arguments.as_slice() else {
-            return Err(JayError::new(
-                "String.valueOf(Object) expected one argument",
-            ));
-        };
-
-        let reference = match value {
-            Value::Null => self.heap.allocate_string("null"),
-            // String.valueOf(String) returns its argument unchanged.
-            Value::Reference(reference) if self.heap.string(*reference).is_ok() => *reference,
-            Value::Reference(reference) => {
-                // Keep the argument rooted while an interpreted toString() may run.
-                caller.stack.push(Value::Reference(*reference));
-                let text = self.reference_to_text(caller, *reference);
-                caller.pop()?;
-                self.heap.allocate_string(text?)
-            }
-            other => {
-                return Err(JayError::new(format!(
-                    "String.valueOf(Object) received {}",
-                    other.type_name(&self.heap)?
-                )));
-            }
-        };
-        caller.stack.push(Value::Reference(reference));
-        self.collect_if_needed(caller);
-        Ok(())
-    }
-
     /// Runs an object's `toString()` and returns the resulting string reference.
     ///
     /// `receiver` is placed in the callee frame, so it stays rooted while the
@@ -103,8 +63,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
             self.invoke_date_to_string(&mut frame, receiver)?;
             return frame.pop_object_ref();
         }
-        if receiver_class_name.starts_with('[') {
-            return self.allocate_identity_to_string(receiver, &receiver_class_name);
+        if receiver_class_name == "java/time/LocalDateTime" {
+            let mut frame = Frame::new(0);
+            self.invoke_local_date_time_to_string(&mut frame, receiver)?;
+            return frame.pop_object_ref();
         }
 
         let target_method_name = "toString".to_string();
@@ -117,13 +79,8 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let (target_class_file, target_method) = if declaring_method.is_private() {
             (declaring_class_file, declaring_method)
         } else {
-            let dispatch_class_name = if receiver_class_name.starts_with('[') {
-                "java/lang/Object"
-            } else {
-                &receiver_class_name
-            };
             let class_file = self.resolve_instance_method_class(
-                dispatch_class_name,
+                super::invocation::dispatch_class_name(&receiver_class_name),
                 &target_method_name,
                 &target_descriptor,
             )?;
@@ -148,10 +105,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Err(JayError::new(
                 "String.valueOf(Object) toString target must not be static",
             ));
-        }
-
-        if target_class_file.this_class == "java/lang/Object" {
-            return self.allocate_identity_to_string(receiver, &receiver_class_name);
         }
 
         if target_method.access_flags & 0x0100 != 0 || target_method.access_flags & 0x0400 != 0 {
@@ -185,17 +138,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
     }
 
-    /// Allocates the VM-side fallback text used by default `Object.toString()`.
-    fn allocate_identity_to_string(
-        &mut self,
-        receiver: ObjectRef,
-        receiver_class_name: &str,
-    ) -> JayResult<ObjectRef> {
-        let identity = self.heap.object_identity(receiver)?;
-        let text = format!("{}@{identity:x}", receiver_class_name.replace('/', "."));
-        Ok(self.heap.allocate_string(text))
-    }
-
     pub(super) fn invoke_pattern_matches(
         &mut self,
         caller: &mut Frame,
@@ -220,12 +162,11 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Err(JayError::new("Pattern.matches received null input"));
         };
 
-        let pattern = self.heap.string(*pattern)?;
+        let pattern = self.java_string(*pattern)?;
         let input = self
-            .heap
-            .string(*input)
+            .java_string(*input)
             .map_err(|_| JayError::new("Pattern.matches currently supports String input only"))?;
-        let matched = native::pattern_matches(pattern, input)?;
+        let matched = native::pattern_matches(&pattern, &input)?;
         caller.stack.push(Value::Int(if matched { 1 } else { 0 }));
         Ok(())
     }
@@ -264,9 +205,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return Err(JayError::new("TimeZone.getTimeZone received null ID"));
         };
 
-        let requested_id = self.heap.string(*id)?.to_string();
+        let requested_id = self.java_string(*id)?;
         let time_zone = native::TimeZone::from_id(&requested_id);
-        let id_reference = self.heap.allocate_string(time_zone.id());
+        let id_reference = self.new_java_string(time_zone.id())?;
         let reference = self.heap.allocate_instance("java/util/TimeZone");
 
         self.heap.put_instance_field(
@@ -297,13 +238,25 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Ok(())
     }
 
+    pub(super) fn invoke_local_date_time_to_string(
+        &mut self,
+        caller: &mut Frame,
+        receiver: ObjectRef,
+    ) -> JayResult<()> {
+        let epoch_millis = self.local_date_time_epoch_millis(receiver)?;
+        let reference = self.new_java_string(native::local_date_time_to_string(epoch_millis))?;
+        caller.stack.push(Value::Reference(reference));
+        self.collect_if_needed(caller);
+        Ok(())
+    }
+
     pub(super) fn invoke_date_to_string(
         &mut self,
         caller: &mut Frame,
         receiver: ObjectRef,
     ) -> JayResult<()> {
         let fast_time = self.date_fast_time(receiver)?;
-        let reference = self.heap.allocate_string(native::date_to_string(fast_time));
+        let reference = self.new_java_string(native::date_to_string(fast_time))?;
         caller.stack.push(Value::Reference(reference));
         self.collect_if_needed(caller);
         Ok(())
@@ -328,7 +281,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         let time_zone = self.simple_date_format_time_zone(receiver)?;
         let fast_time = self.date_fast_time(*date)?;
         let output = native::format_simple_date(&pattern, fast_time, time_zone)?;
-        let reference = self.heap.allocate_string(output);
+        let reference = self.new_java_string(output)?;
         caller.stack.push(Value::Reference(reference));
         self.collect_if_needed(caller);
         Ok(())
@@ -426,7 +379,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             "Ljava/lang/String;",
         );
         match self.heap.get_instance_field(formatter, &field)? {
-            Some(Value::Reference(reference)) => Ok(self.heap.string(reference)?.to_string()),
+            Some(Value::Reference(reference)) => Ok(self.java_string(reference)?),
             Some(Value::Null) | None => Err(JayError::new(
                 "SimpleDateFormat pattern has not been initialized",
             )),
@@ -459,7 +412,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             .heap
             .get_instance_field(reference, &time_zone_id_field())?
         {
-            Some(Value::Reference(id)) => self.heap.string(id)?.to_string(),
+            Some(Value::Reference(id)) => self.java_string(id)?,
             Some(Value::Null) | None => {
                 return Err(JayError::new("TimeZone ID has not been initialized"));
             }

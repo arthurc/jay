@@ -68,7 +68,8 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
 - JDK boot class lookup through `JAVA_HOME/lib/modules`
 - `public static void main(String[] args)` and `public static void main()`, with `args` populated from the command line
 - `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, `System.out.println(char)`, `System.out.println(float)` (shortest round-trip formatting), and focused `System.out.println(Object)` support for `null`, `String`, `Date`, and Jay-created `LocalDateTime`
-- Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
+- `java.lang.String` interpreted from the JDK's own bytecode: strings are ordinary `String` instances with the JDK's `byte[] value`/`byte coder` layout (Latin-1 or little-endian UTF-16), so `length`, `charAt`, `equals`, `hashCode`, `compareTo`, `indexOf`/`lastIndexOf`, `contains`, `startsWith`/`endsWith`, `substring`, `trim`/`strip`/`isBlank`, `concat`, `replace`, `repeat`, `join`, `split` (non-regex fast path), `toCharArray`, `regionMatches`, `equalsIgnoreCase`, `valueOf(...)`, `String(...)` constructors, `Integer.toString`/`parseInt`/`toHexString`, `Long.toString`/`parseLong`, and anything else built on the same primitives run unmodified; string literals are interned per run and `String.intern()` works
+- Heap objects managed by a simple internal mark-sweep garbage collector
 - Limited heap-allocated reference arrays with allocation, length, load, and store bytecodes, including typed JDK arrays such as `HashMap$Node[]`
 - Primitive arrays of `boolean`, `byte`, `char`, `short`, `int`, `long`, and `float` with `newarray`, length, and the typed load/store bytecodes; stores narrow to the element width as the JVM specifies. `double[]` and multi-dimensional arrays are rejected with an explicit error
 - Runtime reference-array store validation that accepts assignable subtypes (for example, allowing `Integer` values in `Number[]`) and rejects incompatible values (for example, rejecting `Integer` values stored into `String[]`)
@@ -76,7 +77,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
 - `long` constants, locals, fields, parameters, return values, and the full arithmetic set including shifts, bitwise operators, and `lcmp`
 - Conversions `i2l`, `l2i`, `l2f`, `i2f`, `f2i`, and the narrowing casts `(byte)`, `(char)`, `(short)`
 - Focused `float` support for constants, fields, locals, multiplication, comparison (`fcmpl`/`fcmpg`), and `float` return values
-- Class literals loaded through `ldc` as cached `java.lang.Class` mirrors, with limited `Class.desiredAssertionStatus()` support that reports assertions as disabled
+- `java.lang.Class` mirrors for classes, interfaces, arrays, and primitive types (`int.class`, `Integer.TYPE`, `int[].class`, `Foo.class`, `getClass()`), created once per type and populated with the `name`, `componentType`, `primitive`, and `modifiers` fields the JDK's own `Class.getName()`, `isArray()`, `isPrimitive()`, `isInterface()`, and `getComponentType()` read; `Class.getPrimitiveClass`, `desiredAssertionStatus0` (assertions disabled), and `java.lang.reflect.Array.newArray` run as natives, so `Arrays.copyOf`/`copyOfRange` on reference arrays work
 - Integer comparisons, branches, loops, `goto_w`, and `switch` on `int` through both `tableswitch` and `lookupswitch`
 - `instanceof` against classes, interfaces, and reference array types
 - Operand stack shuffles `dup`, `dup_x1`, `dup_x2`, `dup2`, `dup2_x1`, `swap`, `pop`, and `pop2`
@@ -95,23 +96,25 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
 - Basic `ArrayList<String>` append and iterator traversal paths used by the integration tests
 - Basic `HashMap<String, Integer>` insertion and entry-set iteration paths used by the integration tests
 - Java string concatenation through `StringConcatFactory.makeConcatWithConstants`
-- `String` instance methods implemented natively over UTF-16 code units: `length`, `isEmpty`, `charAt`, `equals`, `equalsIgnoreCase`, `compareTo`, `hashCode`, `toString`, `contains`, `startsWith`, `endsWith`, `indexOf` (char and `String`, with and without a start index), `lastIndexOf`, `substring`, `trim`, `toUpperCase`, `toLowerCase`, `concat`, `replace` (char and `CharSequence`), and `toCharArray`
-- `String` constructors `String()`, `String(String)`, and `String(char[])`, plus `String.valueOf` for `int`, `long`, `char`, `boolean`, and `char[]`, `Integer.toString(int)`, `Long.toString(long)`, and `Integer.parseInt(String)`
+- Residual `String` shims, kept only where the JDK implementation needs machinery the VM lacks: `toUpperCase()`/`toLowerCase()` (the JDK goes through `Locale.getDefault()`) use Unicode default case mapping, and `String.format(String, Object...)` supports `%s`, `%d`, `%%`, and `%n` (the JDK's `Formatter` needs `Locale`, regex, and `double`); `jdk.internal.util.Preconditions` uses it for `StringIndexOutOfBoundsException` messages
 - `switch` on `String` values (javac's `hashCode` + `equals` lowering)
 - `StringBuilder` backed by a native buffer: constructors `()`, `(int)`, `(String)`, `(CharSequence)`, `append` for `String`, `Object`, `CharSequence`, `int`, `long`, `float`, `char`, and `boolean`, plus `toString`, `length`, `isEmpty`, `charAt`, `reverse`, and `setLength`
 - String concatenation and `println(Object)` format `char`, `boolean`, `long`, `float`, `Integer`, `StringBuilder`, and arbitrary objects through their interpreted `toString()`
 - `byte`, `char`, and `short` fields, parameters, and return values, carried as `int` values
-- Focused `String.valueOf(Object)` behavior with `null` handling, `Integer`/`String` fast paths, and virtual `toString()` fallback for general objects, VM-side default `Object.toString()` identity formatting, and array receivers via `Object`-style formatting
+- `String.valueOf(Object)` and default `Object.toString()` run from bytecode, with `Object.hashCode()`/`System.identityHashCode` natives reporting heap-slot identities
 - Focused `Pattern.matches(String, CharSequence)` support for the regex constructs exercised by the integration tests, including `.`, `*`, `+`, exact repetition like `{4}`, digit escapes like `\d`, and simple character classes such as `[0-9]`
 - Focused date/time shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `LocalDateTime.now()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
-- Java exceptions: `throw`, `try`/`catch`/`finally`, multi-catch, handler selection by exception type through the class hierarchy, and propagation across interpreted frames; JDK exception constructors run as bytecode with `Throwable.fillInStackTrace(int)`, `Object.getClass()`, and `Class.getName()` shimmed so `getMessage()` and `toString()` work
+- Native methods dispatched through a Rust native table when resolution reaches an `ACC_NATIVE` method: `System.arraycopy` (primitive and reference arrays, with HotSpot's `ArrayIndexOutOfBoundsException`/`ArrayStoreException` messages), `System.nanoTime()`, `Object.clone()` on arrays and `Cloneable` instances, and the `jdk.internal.misc.CDS` stubs that let `List.of(...)` and other CDS-aware JDK initializers run
+- `jdk.internal.misc.Unsafe` over primitive arrays: `arrayBaseOffset`/`arrayIndexScale` report a 16-byte base and natural element widths, and `getByte`…`getLong`, `putByte`…`putLong`, and `copyMemory` address array elements as little-endian bytes at any offset. This is enough for `ArraysSupport.vectorizedMismatch`, so `Arrays.equals`/`Arrays.mismatch` and the JDK's own `String` comparisons run from bytecode. Field offsets, off-heap memory, and reference accesses are not supported
+- Java exceptions: `throw`, `try`/`catch`/`finally`, multi-catch, handler selection by exception type through the class hierarchy, and propagation across interpreted frames; JDK exception constructors run as bytecode with `Throwable.fillInStackTrace(int)` and `Object.getClass()` provided as natives so `getMessage()` and `toString()` work
 - VM faults surface as Java exceptions that can be caught: `NullPointerException`, `ArithmeticException` (`/ by zero`), `ArrayIndexOutOfBoundsException`, `ArrayStoreException`, `ClassCastException`, `NegativeArraySizeException`, `StringIndexOutOfBoundsException`, and `NumberFormatException`, with HotSpot-style messages
 - Uncaught exceptions print `Exception in thread "main" <class>: <message>` followed by the interpreted Java frames, and exit with a failure status
-- Class files with major versions 45 through 71 (Java 1.1 through Java 27)
+- Class files with major versions 45 through 71 (Java 1.1 through Java 27), with constant-pool strings decoded from the JVM's modified UTF-8 (embedded `NUL`, supplementary characters)
+- Before `main`, the VM runs `System.setJavaLangAccess()` so `SharedSecrets.getJavaLangAccess()` is populated as HotSpot's `initPhase1` would; `StringUTF16.hashCode`, `StringJoiner`, and `EnumMap` depend on it
 - Each class file is read and parsed once per run and shared by every call, field lookup, and hierarchy walk
 
-`double` values, multi-dimensional arrays, string interning, full collection semantics,
+`double` values, multi-dimensional arrays, full collection semantics,
 general invokedynamic bootstrap execution, lambdas, broad date formatting, general regex
 execution, `printStackTrace()`, stack-trace elements, helpful `NullPointerException`
 messages, and general native/JDK method execution are still unsupported. Unsupported bytecode or method shapes fail with an explicit `jay:` error

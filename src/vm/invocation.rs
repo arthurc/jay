@@ -23,9 +23,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
         if method.class_name == "java/io/PrintStream" && method.name == "println" {
             return match method.descriptor {
                 "(Ljava/lang/String;)V" => {
-                    let reference = frame.pop_string_reference(&self.heap)?;
+                    let reference = self.pop_java_string(frame)?;
                     frame.pop_print_stream()?;
-                    let value = self.heap.string(reference)?;
+                    let value = self.java_string(reference)?;
                     writeln!(self.output, "{value}")?;
                     Ok(())
                 }
@@ -80,59 +80,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
             };
         }
 
-        if method.class_name == "java/lang/Class"
-            && method.name == "desiredAssertionStatus"
-            && method.descriptor == "()Z"
-        {
-            let receiver = frame.pop_object_ref()?;
-            let receiver_class_name = self.heap.instance_class_name(receiver)?;
-            if receiver_class_name != "java/lang/Class" {
-                return Err(JayError::new(format!(
-                    "Class.desiredAssertionStatus receiver was {}",
-                    self.heap.type_name(receiver)?
-                )));
-            }
-
-            frame.stack.push(Value::Int(0));
-            return Ok(());
-        }
-
-        if method.class_name == "java/lang/Throwable"
-            && method.name == "fillInStackTrace"
-            && method.descriptor == "(I)Ljava/lang/Throwable;"
-        {
-            // HotSpot captures the native backtrace here; Jay reports Java
-            // frames through JayError instead, so the receiver is returned as is.
-            frame.pop_int()?;
-            let receiver = frame.pop_object_ref()?;
-            frame.stack.push(Value::Reference(receiver));
-            return Ok(());
-        }
-
-        if method.class_name == "java/lang/Object"
-            && method.name == "getClass"
-            && method.descriptor == "()Ljava/lang/Class;"
-        {
-            let receiver = frame.pop_object_ref()?;
-            let class_name = self.reference_type_name(receiver)?;
-            let mirror = self.class_mirror(&class_name);
-            frame.stack.push(Value::Reference(mirror));
-            self.collect_if_needed(frame);
-            return Ok(());
-        }
-
-        if method.class_name == "java/lang/Class"
-            && method.name == "getName"
-            && method.descriptor == "()Ljava/lang/String;"
-        {
-            let receiver = frame.pop_object_ref()?;
-            let class_name = self.mirrored_class_name(receiver)?;
-            let name = self.heap.allocate_string(class_name.replace('/', "."));
-            frame.stack.push(Value::Reference(name));
-            self.collect_if_needed(frame);
-            return Ok(());
-        }
-
         let target_method_name = method.name.to_string();
         let target_descriptor = method.descriptor.to_string();
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
@@ -166,11 +113,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
             }
             None => return Err(JayError::new("invokevirtual receiver type is unavailable")),
         };
-        if target_method_name == "toString"
-            && target_descriptor == "()Ljava/lang/String;"
-            && receiver_class_name == "java/util/Date"
-        {
-            return self.invoke_date_to_string(frame, receiver);
+        if target_method_name == "toString" && target_descriptor == "()Ljava/lang/String;" {
+            // Jay's Date and LocalDateTime are VM-side stand-ins whose
+            // interpreted toString() would read fields they do not have.
+            if receiver_class_name == "java/util/Date" {
+                return self.invoke_date_to_string(frame, receiver);
+            }
+            if receiver_class_name == "java/time/LocalDateTime" {
+                return self.invoke_local_date_time_to_string(frame, receiver);
+            }
         }
         if receiver_class_name == "java/lang/StringBuilder"
             && self.try_invoke_string_builder_method(
@@ -189,7 +140,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 &target_method_name,
                 &target_descriptor,
                 receiver,
-                &arguments,
             )?
         {
             return Ok(());
@@ -206,8 +156,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             return self.invoke_simple_date_format_set_time_zone(receiver, &arguments);
         }
+        // Array classes have no class file; their methods are Object's.
         let (declaring_class_file, declaring_method) = self.resolve_instance_method(
-            method.class_name,
+            dispatch_class_name(method.class_name),
             &target_method_name,
             &target_descriptor,
         )?;
@@ -215,7 +166,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
             (declaring_class_file, declaring_method)
         } else {
             let class_file = self.resolve_instance_method_class(
-                &receiver_class_name,
+                dispatch_class_name(&receiver_class_name),
                 &target_method_name,
                 &target_descriptor,
             )?;
@@ -246,9 +197,20 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        if target_method.access_flags & 0x0100 != 0 || target_method.access_flags & 0x0400 != 0 {
+        if target_method.is_native() {
+            return self.invoke_native(
+                frame,
+                &target_class_file.this_class,
+                &target_method_name,
+                &target_descriptor,
+                Some(receiver),
+                &arguments,
+            );
+        }
+
+        if target_method.is_abstract() {
             return Err(JayError::new(format!(
-                "invokevirtual target {target_name} must not be native or abstract"
+                "invokevirtual target {target_name} must not be abstract"
             )));
         }
 
@@ -314,12 +276,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
             && target_descriptor == "(Ljava/lang/String;)V"
         {
             return self.invoke_simple_date_format_constructor(caller, &descriptor, &target_name);
-        }
-
-        if target_class_name == "java/lang/String"
-            && self.try_invoke_string_constructor(caller, &target_descriptor)?
-        {
-            return Ok(());
         }
 
         if target_class_name == "java/lang/StringBuilder"
@@ -454,7 +410,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         )?;
 
         let value = apply_string_concat_recipe(&recipe, &text_arguments)?;
-        let reference = self.heap.allocate_string(value);
+        let reference = self.new_java_string(value)?;
         frame.stack.push(Value::Reference(reference));
         self.collect_if_needed(frame);
         Ok(())
@@ -593,11 +549,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
             return self.invoke_integer_value_of(caller, &descriptor, &target_name);
         }
         if target_class_name == "java/lang/String"
-            && target_method_name == "valueOf"
-            && target_descriptor == "(Ljava/lang/Object;)Ljava/lang/String;"
+            && target_method_name == "format"
+            && target_descriptor == "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;"
         {
-            let descriptor = MethodDescriptor::parse(&target_descriptor)?;
-            return self.invoke_string_value_of_object(caller, &descriptor, &target_name);
+            return self.invoke_string_format(caller);
         }
         if target_class_name == "java/util/regex/Pattern"
             && target_method_name == "matches"
@@ -612,17 +567,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
         {
             return self.invoke_local_date_time_now(caller);
         }
-        if self.try_invoke_string_static(
-            caller,
-            &target_class_name,
-            &target_method_name,
-            &target_descriptor,
-        )? {
-            return Ok(());
-        }
-
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;
-        let target_class_file = self.load_class_file(&target_class_name)?;
+        // Static methods are inherited, so resolution walks the superclass chain.
+        let target_class_file = self
+            .find_instance_method_class(
+                &target_class_name,
+                &target_method_name,
+                &target_descriptor,
+            )?
+            .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} not found")))?;
         let method = target_class_file
             .find_method(&target_method_name, &target_descriptor)
             .ok_or_else(|| JayError::new(format!("invokestatic target {target_name} not found")))?;
@@ -633,18 +586,25 @@ impl<'a, W: Write> Interpreter<'a, W> {
             )));
         }
 
-        if target_class_name == "java/lang/System"
-            && target_method_name == "registerNatives"
-            && target_descriptor == "()V"
-        {
-            // HotSpot uses this to register VM natives; Jay dispatches supported
-            // native behavior through explicit Rust shims, so there is no table to populate.
-            return Ok(());
+        if method.is_native() {
+            let arguments = self.pop_method_arguments(
+                caller,
+                &descriptor,
+                &format!("invokestatic target {target_name}"),
+            )?;
+            return self.invoke_native(
+                caller,
+                &target_class_name,
+                &target_method_name,
+                &target_descriptor,
+                None,
+                &arguments,
+            );
         }
 
-        if method.access_flags & 0x0100 != 0 || method.access_flags & 0x0400 != 0 {
+        if method.is_abstract() {
             return Err(JayError::new(format!(
-                "invokestatic target {target_name} must not be native or abstract"
+                "invokestatic target {target_name} must not be abstract"
             )));
         }
 
@@ -668,5 +628,15 @@ impl<'a, W: Write> Interpreter<'a, W> {
             result?,
             &format!("invokestatic target {target_name}"),
         )
+    }
+}
+
+/// Maps array runtime types (`[I`, `[Ljava/lang/String;`) to `java/lang/Object`,
+/// the class whose methods they inherit; other class names pass through.
+pub(super) fn dispatch_class_name(class_name: &str) -> &str {
+    if class_name.starts_with('[') {
+        "java/lang/Object"
+    } else {
+        class_name
     }
 }
