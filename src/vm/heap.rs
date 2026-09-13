@@ -36,6 +36,168 @@ enum ObjectKind {
         descriptor: String,
         elements: Vec<Value>,
     },
+    PrimitiveArray(PrimitiveArray),
+}
+
+/// Element type of a primitive array, as encoded by the `newarray` `atype` operand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PrimitiveElement {
+    Boolean,
+    Char,
+    Float,
+    Byte,
+    Short,
+    Int,
+    Long,
+}
+
+impl PrimitiveElement {
+    /// Decodes the `newarray` operand. `double` (7) is rejected because the VM has no double values.
+    pub(super) fn from_atype(atype: u8) -> JayResult<Self> {
+        match atype {
+            4 => Ok(Self::Boolean),
+            5 => Ok(Self::Char),
+            6 => Ok(Self::Float),
+            7 => Err(JayError::new("unsupported newarray element type double")),
+            8 => Ok(Self::Byte),
+            9 => Ok(Self::Short),
+            10 => Ok(Self::Int),
+            11 => Ok(Self::Long),
+            other => Err(JayError::new(format!(
+                "invalid newarray element type {other}"
+            ))),
+        }
+    }
+
+    /// The array descriptor for this element type, such as `[I`.
+    pub(super) fn array_descriptor(self) -> &'static str {
+        match self {
+            Self::Boolean => "[Z",
+            Self::Char => "[C",
+            Self::Float => "[F",
+            Self::Byte => "[B",
+            Self::Short => "[S",
+            Self::Int => "[I",
+            Self::Long => "[J",
+        }
+    }
+
+    /// The Java source spelling of the array type, such as `int[]`.
+    fn array_name(self) -> &'static str {
+        match self {
+            Self::Boolean => "boolean[]",
+            Self::Char => "char[]",
+            Self::Float => "float[]",
+            Self::Byte => "byte[]",
+            Self::Short => "short[]",
+            Self::Int => "int[]",
+            Self::Long => "long[]",
+        }
+    }
+}
+
+/// Storage for a primitive array. Elements are kept at their natural width so
+/// stores narrow and loads widen exactly as the JVM specifies.
+#[derive(Debug)]
+pub(super) enum PrimitiveArray {
+    Boolean(Vec<i8>),
+    Char(Vec<u16>),
+    Float(Vec<f32>),
+    Byte(Vec<i8>),
+    Short(Vec<i16>),
+    Int(Vec<i32>),
+    Long(Vec<i64>),
+}
+
+impl PrimitiveArray {
+    fn new(element: PrimitiveElement, length: usize) -> Self {
+        match element {
+            PrimitiveElement::Boolean => Self::Boolean(vec![0; length]),
+            PrimitiveElement::Char => Self::Char(vec![0; length]),
+            PrimitiveElement::Float => Self::Float(vec![0.0; length]),
+            PrimitiveElement::Byte => Self::Byte(vec![0; length]),
+            PrimitiveElement::Short => Self::Short(vec![0; length]),
+            PrimitiveElement::Int => Self::Int(vec![0; length]),
+            PrimitiveElement::Long => Self::Long(vec![0; length]),
+        }
+    }
+
+    fn element(&self) -> PrimitiveElement {
+        match self {
+            Self::Boolean(_) => PrimitiveElement::Boolean,
+            Self::Char(_) => PrimitiveElement::Char,
+            Self::Float(_) => PrimitiveElement::Float,
+            Self::Byte(_) => PrimitiveElement::Byte,
+            Self::Short(_) => PrimitiveElement::Short,
+            Self::Int(_) => PrimitiveElement::Int,
+            Self::Long(_) => PrimitiveElement::Long,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Boolean(values) | Self::Byte(values) => values.len(),
+            Self::Char(values) => values.len(),
+            Self::Float(values) => values.len(),
+            Self::Short(values) => values.len(),
+            Self::Int(values) => values.len(),
+            Self::Long(values) => values.len(),
+        }
+    }
+
+    fn load(&self, index: usize) -> Option<Value> {
+        match self {
+            Self::Boolean(values) | Self::Byte(values) => {
+                values.get(index).map(|value| Value::Int(*value as i32))
+            }
+            Self::Char(values) => values.get(index).map(|value| Value::Int(*value as i32)),
+            Self::Float(values) => values.get(index).map(|value| Value::Float(*value)),
+            Self::Short(values) => values.get(index).map(|value| Value::Int(*value as i32)),
+            Self::Int(values) => values.get(index).map(|value| Value::Int(*value)),
+            Self::Long(values) => values.get(index).map(|value| Value::Long(*value)),
+        }
+    }
+
+    /// Stores `value`, narrowing ints to the element width. Returns `Ok(false)`
+    /// when the index is out of bounds and an error when the value kind is wrong.
+    fn store(&mut self, index: usize, value: &Value) -> JayResult<bool> {
+        let element = self.element();
+        let wrong_kind = || {
+            JayError::new(format!(
+                "expected {} element for {}, found {value:?}",
+                element_value_name(element),
+                element.array_name()
+            ))
+        };
+        match (self, value) {
+            (Self::Boolean(values), Value::Int(int)) => Ok(set(values, index, (*int & 1) as i8)),
+            (Self::Byte(values), Value::Int(int)) => Ok(set(values, index, *int as i8)),
+            (Self::Char(values), Value::Int(int)) => Ok(set(values, index, *int as u16)),
+            (Self::Short(values), Value::Int(int)) => Ok(set(values, index, *int as i16)),
+            (Self::Int(values), Value::Int(int)) => Ok(set(values, index, *int)),
+            (Self::Float(values), Value::Float(float)) => Ok(set(values, index, *float)),
+            (Self::Long(values), Value::Long(long)) => Ok(set(values, index, *long)),
+            _ => Err(wrong_kind()),
+        }
+    }
+}
+
+fn element_value_name(element: PrimitiveElement) -> &'static str {
+    match element {
+        PrimitiveElement::Float => "float",
+        PrimitiveElement::Long => "long",
+        _ => "int",
+    }
+}
+
+fn set<T>(values: &mut [T], index: usize, value: T) -> bool {
+    match values.get_mut(index) {
+        Some(slot) => {
+            *slot = value;
+            true
+        }
+        None => false,
+    }
 }
 
 /// Identifies a field exactly as it appears in a class constant pool.
@@ -92,6 +254,16 @@ impl Heap {
         })
     }
 
+    pub(super) fn allocate_primitive_array(
+        &mut self,
+        element: PrimitiveElement,
+        length: usize,
+    ) -> ObjectRef {
+        self.allocate(ObjectKind::PrimitiveArray(PrimitiveArray::new(
+            element, length,
+        )))
+    }
+
     fn allocate(&mut self, kind: ObjectKind) -> ObjectRef {
         let object = HeapObject {
             marked: false,
@@ -119,6 +291,10 @@ impl Heap {
                 "expected String reference, found {}",
                 reference_array_name(descriptor)
             ))),
+            ObjectKind::PrimitiveArray(ref array) => Err(JayError::new(format!(
+                "expected String reference, found {}",
+                array.element().array_name()
+            ))),
         }
     }
 
@@ -131,6 +307,9 @@ impl Heap {
             ObjectKind::ObjectArray { ref descriptor, .. } => {
                 Ok(Some(ValueType::Reference(descriptor.clone())))
             }
+            ObjectKind::PrimitiveArray(ref array) => Ok(Some(ValueType::Reference(
+                array.element().array_descriptor().to_string(),
+            ))),
         }
     }
 
@@ -139,6 +318,7 @@ impl Heap {
             ObjectKind::String(_) => Ok("String".to_string()),
             ObjectKind::Instance { ref class_name, .. } => Ok(class_name.replace('/', ".")),
             ObjectKind::ObjectArray { ref descriptor, .. } => Ok(reference_array_name(descriptor)),
+            ObjectKind::PrimitiveArray(ref array) => Ok(array.element().array_name().to_string()),
         }
     }
 
@@ -151,6 +331,10 @@ impl Heap {
             ObjectKind::ObjectArray { ref descriptor, .. } => Err(JayError::new(format!(
                 "expected instance reference, found {}",
                 reference_array_name(descriptor)
+            ))),
+            ObjectKind::PrimitiveArray(ref array) => Err(JayError::new(format!(
+                "expected instance reference, found {}",
+                array.element().array_name()
             ))),
         }
     }
@@ -173,6 +357,10 @@ impl Heap {
                 "expected instance reference for putfield, found {}",
                 reference_array_name(descriptor)
             ))),
+            ObjectKind::PrimitiveArray(ref array) => Err(JayError::new(format!(
+                "expected instance reference for putfield, found {}",
+                array.element().array_name()
+            ))),
         }
     }
 
@@ -190,15 +378,61 @@ impl Heap {
                 "expected instance reference for getfield, found {}",
                 reference_array_name(descriptor)
             ))),
+            ObjectKind::PrimitiveArray(ref array) => Err(JayError::new(format!(
+                "expected instance reference for getfield, found {}",
+                array.element().array_name()
+            ))),
         }
     }
 
     pub(super) fn array_length(&self, reference: ObjectRef) -> JayResult<usize> {
         match self.object(reference)?.kind {
             ObjectKind::ObjectArray { ref elements, .. } => Ok(elements.len()),
+            ObjectKind::PrimitiveArray(ref array) => Ok(array.len()),
             _ => Err(JayError::new(format!(
-                "expected object array reference, found {}",
+                "expected array reference, found {}",
                 self.type_name(reference)?
+            ))),
+        }
+    }
+
+    /// Loads one element of a primitive array, widened to `Int`, `Long`, or `Float`.
+    pub(super) fn load_primitive(&self, reference: ObjectRef, index: usize) -> JayResult<Value> {
+        match self.object(reference)?.kind {
+            ObjectKind::PrimitiveArray(ref array) => array.load(index).ok_or_else(|| {
+                JayError::new(format!(
+                    "array index {index} out of bounds for length {}",
+                    array.len()
+                ))
+            }),
+            _ => Err(JayError::new(format!(
+                "expected primitive array reference, found {}",
+                self.type_name(reference)?
+            ))),
+        }
+    }
+
+    /// Stores one element into a primitive array, narrowing to the element width.
+    pub(super) fn store_primitive(
+        &mut self,
+        reference: ObjectRef,
+        index: usize,
+        value: Value,
+    ) -> JayResult<()> {
+        let type_name = self.type_name(reference)?;
+        match self.object_mut(reference)?.kind {
+            ObjectKind::PrimitiveArray(ref mut array) => {
+                if array.store(index, &value)? {
+                    Ok(())
+                } else {
+                    Err(JayError::new(format!(
+                        "array index {index} out of bounds for length {}",
+                        array.len()
+                    )))
+                }
+            }
+            _ => Err(JayError::new(format!(
+                "expected primitive array reference, found {type_name}"
             ))),
         }
     }
@@ -228,6 +462,7 @@ impl Heap {
     pub(super) fn array_descriptor(&self, reference: ObjectRef) -> JayResult<&str> {
         match self.object(reference)?.kind {
             ObjectKind::ObjectArray { ref descriptor, .. } => Ok(descriptor),
+            ObjectKind::PrimitiveArray(ref array) => Ok(array.element().array_descriptor()),
             _ => Err(JayError::new(format!(
                 "expected object array reference, found {}",
                 self.type_name(reference)?
@@ -354,6 +589,7 @@ impl Heap {
                 ObjectKind::ObjectArray { ref elements, .. } => {
                     elements.iter().filter_map(Value::object_ref).collect()
                 }
+                ObjectKind::PrimitiveArray(_) => Vec::new(),
             }
         };
 
@@ -378,12 +614,29 @@ impl Heap {
     }
 }
 
-fn reference_array_name(descriptor: &str) -> String {
-    descriptor
-        .strip_prefix("[L")
-        .and_then(|descriptor| descriptor.strip_suffix(';'))
-        .map(|class_name| format!("{}[]", class_name.replace('/', ".")))
-        .unwrap_or_else(|| descriptor.replace('/', "."))
+/// Renders an array descriptor such as `[Ljava/lang/String;` or `[[I` as Java source spelling.
+pub(super) fn reference_array_name(descriptor: &str) -> String {
+    let Some(component) = descriptor.strip_prefix('[') else {
+        return descriptor.replace('/', ".");
+    };
+    let component_name = match component {
+        "Z" => "boolean".to_string(),
+        "B" => "byte".to_string(),
+        "C" => "char".to_string(),
+        "S" => "short".to_string(),
+        "I" => "int".to_string(),
+        "J" => "long".to_string(),
+        "F" => "float".to_string(),
+        "D" => "double".to_string(),
+        _ => match component
+            .strip_prefix('L')
+            .and_then(|c| c.strip_suffix(';'))
+        {
+            Some(class_name) => class_name.replace('/', "."),
+            None => reference_array_name(component),
+        },
+    };
+    format!("{component_name}[]")
 }
 
 fn reference_array_component(descriptor: &str) -> Option<&str> {
@@ -407,6 +660,116 @@ fn is_reference_store_compatible(actual: &str, array_descriptor: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primitive_arrays_round_trip_each_element_kind() {
+        let mut heap = Heap::new();
+        let cases = [
+            (PrimitiveElement::Boolean, Value::Int(1), Value::Int(1)),
+            (PrimitiveElement::Byte, Value::Int(300), Value::Int(44)),
+            (PrimitiveElement::Char, Value::Int(-1), Value::Int(65535)),
+            (
+                PrimitiveElement::Short,
+                Value::Int(90000),
+                Value::Int(24464),
+            ),
+            (PrimitiveElement::Int, Value::Int(-7), Value::Int(-7)),
+            (
+                PrimitiveElement::Long,
+                Value::Long(1 << 40),
+                Value::Long(1 << 40),
+            ),
+            (
+                PrimitiveElement::Float,
+                Value::Float(1.5),
+                Value::Float(1.5),
+            ),
+        ];
+
+        for (element, stored, expected) in cases {
+            let array = heap.allocate_primitive_array(element, 2);
+            heap.store_primitive(array, 1, stored).unwrap();
+            assert_eq!(heap.load_primitive(array, 1).unwrap(), expected);
+            assert_eq!(heap.array_length(array).unwrap(), 2);
+            assert_eq!(
+                heap.value_type(array).unwrap(),
+                Some(ValueType::Reference(element.array_descriptor().to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn boolean_arrays_keep_only_the_low_bit() {
+        let mut heap = Heap::new();
+        let array = heap.allocate_primitive_array(PrimitiveElement::Boolean, 1);
+        heap.store_primitive(array, 0, Value::Int(2)).unwrap();
+        assert_eq!(heap.load_primitive(array, 0).unwrap(), Value::Int(0));
+    }
+
+    #[test]
+    fn primitive_arrays_report_bounds_and_kind_errors() {
+        let mut heap = Heap::new();
+        let array = heap.allocate_primitive_array(PrimitiveElement::Int, 3);
+
+        let error = heap.load_primitive(array, 3).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("index 3 out of bounds for length 3")
+        );
+
+        let error = heap.store_primitive(array, 0, Value::Long(1)).unwrap_err();
+        assert!(error.to_string().contains("expected int element for int[]"));
+
+        assert_eq!(heap.type_name(array).unwrap(), "int[]");
+        assert!(
+            heap.string(array)
+                .unwrap_err()
+                .to_string()
+                .contains("int[]")
+        );
+    }
+
+    #[test]
+    fn newarray_atype_decoding_rejects_double() {
+        assert_eq!(
+            PrimitiveElement::from_atype(10).unwrap(),
+            PrimitiveElement::Int
+        );
+        assert!(
+            PrimitiveElement::from_atype(7)
+                .unwrap_err()
+                .to_string()
+                .contains("double")
+        );
+        assert!(PrimitiveElement::from_atype(12).is_err());
+    }
+
+    #[test]
+    fn garbage_collection_treats_primitive_arrays_as_leaves() {
+        let mut heap = Heap::new();
+        let kept = heap.allocate_primitive_array(PrimitiveElement::Int, 1);
+        let dropped = heap.allocate_primitive_array(PrimitiveElement::Long, 1);
+
+        heap.collect([Value::Reference(kept)].iter());
+
+        assert_eq!(heap.array_length(kept).unwrap(), 1);
+        assert!(heap.array_length(dropped).is_err());
+    }
+
+    #[test]
+    fn array_names_render_primitive_and_nested_components() {
+        assert_eq!(reference_array_name("[I"), "int[]");
+        assert_eq!(reference_array_name("[[I"), "int[][]");
+        assert_eq!(
+            reference_array_name("[Ljava/lang/String;"),
+            "java.lang.String[]"
+        );
+        assert_eq!(
+            reference_array_name("[[Ljava/lang/String;"),
+            "java.lang.String[][]"
+        );
+    }
 
     #[test]
     fn heap_allocates_and_resolves_string_objects() {

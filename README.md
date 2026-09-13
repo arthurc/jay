@@ -70,6 +70,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
 - `System.out.println(String)`, `System.out.println(int)`, `System.out.println(long)`, `System.out.println(boolean)`, `System.out.println(char)`, `System.out.println(float)` (shortest round-trip formatting), and focused `System.out.println(Object)` support for `null`, `String`, `Date`, and Jay-created `LocalDateTime`
 - Heap-allocated `String` values managed by a simple internal mark-sweep garbage collector
 - Limited heap-allocated reference arrays with allocation, length, load, and store bytecodes, including typed JDK arrays such as `HashMap$Node[]`
+- Primitive arrays of `boolean`, `byte`, `char`, `short`, `int`, `long`, and `float` with `newarray`, length, and the typed load/store bytecodes; stores narrow to the element width as the JVM specifies. `double[]` and multi-dimensional arrays are rejected with an explicit error
 - Runtime reference-array store validation that accepts assignable subtypes (for example, allowing `Integer` values in `Number[]`) and rejects incompatible values (for example, rejecting `Integer` values stored into `String[]`)
 - `int` constants, locals, fields, and the full arithmetic set: `+ - * / %`, negation, `<< >> >>>`, `& | ^`, and increment
 - `long` constants, locals, fields, parameters, return values, and the full arithmetic set including shifts, bitwise operators, and `lcmp`
@@ -101,7 +102,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
 - Class files with major versions 45 through 71 (Java 1.1 through Java 27)
 - Each class file is read and parsed once per run and shared by every call, field lookup, and hierarchy walk
 
-Primitive arrays, `double` values, string interning, full collection semantics,
+`double` values, multi-dimensional arrays, string interning, full collection semantics,
 general invokedynamic bootstrap execution, broad date formatting, general regex
 execution, and general native/JDK method execution are still unsupported. Unsupported bytecode or method shapes fail with an explicit error
 and an interpreted Java stacktrace that names each active class, method

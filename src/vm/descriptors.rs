@@ -116,7 +116,7 @@ pub(super) fn parse_field_descriptor(descriptor: &str) -> JayResult<FieldType> {
         return Ok(FieldType::Reference);
     }
 
-    if is_supported_object_array_descriptor(descriptor) {
+    if is_supported_array_descriptor(descriptor) {
         return Ok(FieldType::Reference);
     }
 
@@ -149,6 +149,10 @@ fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueTyp
     }
 
     if let Some(array_type) = input.strip_prefix('[') {
+        if let Some(remaining) = array_type.strip_prefix(PRIMITIVE_ARRAY_ELEMENTS) {
+            return Ok((ValueType::Reference(input[..2].to_string()), remaining));
+        }
+
         if let Some(reference_type) = array_type.strip_prefix('L') {
             let Some(end_index) = reference_type.find(';') else {
                 return Err(JayError::new(format!(
@@ -193,10 +197,20 @@ fn parse_value_type<'a>(input: &'a str, descriptor: &str) -> JayResult<(ValueTyp
     )))
 }
 
-fn is_supported_object_array_descriptor(descriptor: &str) -> bool {
+/// Primitive element letters accepted in array descriptors (`double` is excluded).
+const PRIMITIVE_ARRAY_ELEMENTS: [char; 7] = ['Z', 'B', 'C', 'S', 'I', 'J', 'F'];
+
+/// Accepts one-dimensional class arrays (`[Ljava/lang/Object;`) and primitive
+/// arrays other than `double[]`. Nested arrays stay rejected.
+fn is_supported_array_descriptor(descriptor: &str) -> bool {
     let Some(element_type) = descriptor.strip_prefix('[') else {
         return false;
     };
+    if element_type.len() == 1 {
+        return element_type
+            .chars()
+            .all(|letter| PRIMITIVE_ARRAY_ELEMENTS.contains(&letter));
+    }
     element_type.starts_with('L') && element_type.ends_with(';') && element_type.len() > 2
 }
 
@@ -222,15 +236,48 @@ mod tests {
             parse_field_descriptor("[Ljava/lang/Object;").unwrap(),
             FieldType::Reference
         );
+        for descriptor in ["[Z", "[B", "[C", "[S", "[I", "[J", "[F"] {
+            assert_eq!(
+                parse_field_descriptor(descriptor).unwrap(),
+                FieldType::Reference,
+                "{descriptor}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_primitive_array_method_descriptors() {
+        let descriptor = MethodDescriptor::parse("([I[C)[B").unwrap();
+
+        assert_eq!(
+            descriptor.parameter_types,
+            vec![
+                ValueType::Reference("[I".to_string()),
+                ValueType::Reference("[C".to_string())
+            ]
+        );
+        assert_eq!(
+            descriptor.return_type,
+            ReturnType::Type(ValueType::Reference("[B".to_string()))
+        );
     }
 
     #[test]
     fn rejects_unsupported_field_descriptors() {
-        let array_error = parse_field_descriptor("[I").unwrap_err();
+        for descriptor in ["[D", "[[I", "[[Ljava/lang/String;"] {
+            let array_error = parse_field_descriptor(descriptor).unwrap_err();
+            assert!(
+                array_error
+                    .to_string()
+                    .contains("unsupported array field descriptor"),
+                "{descriptor}: {array_error}"
+            );
+        }
         assert!(
-            array_error
+            MethodDescriptor::parse("([D)V")
+                .unwrap_err()
                 .to_string()
-                .contains("unsupported array field descriptor")
+                .contains("unsupported array type")
         );
 
         let long_error = parse_field_descriptor("D").unwrap_err();
@@ -350,9 +397,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_primitive_array_method_descriptors() {
-        let error = MethodDescriptor::parse("([I)V").unwrap_err();
+    fn rejects_double_and_nested_array_method_descriptors() {
+        for descriptor in ["([D)V", "([[I)V", "()[[Ljava/lang/String;"] {
+            let error = MethodDescriptor::parse(descriptor).unwrap_err();
 
-        assert!(error.to_string().contains("unsupported array type"));
+            assert!(
+                error.to_string().contains("unsupported array type"),
+                "{descriptor}: {error}"
+            );
+        }
     }
 }

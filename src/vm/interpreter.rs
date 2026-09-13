@@ -384,6 +384,10 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 let index = read_u2(&code.bytes, pc)?;
                 self.new_object(class_file, frame, index)?;
             }
+            0xbc => {
+                let atype = read_u1(&code.bytes, pc)?;
+                self.new_primitive_array(frame, atype)?;
+            }
             0xbd => {
                 let index = read_u2(&code.bytes, pc)?;
                 self.new_object_array(class_file, frame, index)?;
@@ -411,6 +415,14 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     *pc = branch_target(code.bytes.len(), opcode_pc, offset)?;
                 }
             }
+            0x2e | 0x2f | 0x30 | 0x33 | 0x34 | 0x35 => {
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                let value = self
+                    .heap
+                    .load_primitive(reference, checked_array_index(index)?)?;
+                frame.stack.push(value);
+            }
             0x32 => {
                 let index = frame.pop_int()?;
                 let reference = frame.pop_object_ref()?;
@@ -418,6 +430,36 @@ impl<'a, W: Write> Interpreter<'a, W> {
                     .heap
                     .load_array_reference(reference, checked_array_index(index)?)?;
                 frame.stack.push(value);
+            }
+            0x4f | 0x54 | 0x55 | 0x56 => {
+                let value = frame.pop_int()?;
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                self.heap.store_primitive(
+                    reference,
+                    checked_array_index(index)?,
+                    Value::Int(value),
+                )?;
+            }
+            0x50 => {
+                let value = frame.pop_long()?;
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                self.heap.store_primitive(
+                    reference,
+                    checked_array_index(index)?,
+                    Value::Long(value),
+                )?;
+            }
+            0x51 => {
+                let value = frame.pop_float()?;
+                let index = frame.pop_int()?;
+                let reference = frame.pop_object_ref()?;
+                self.heap.store_primitive(
+                    reference,
+                    checked_array_index(index)?,
+                    Value::Float(value),
+                )?;
             }
             0x53 => {
                 let value = frame.pop_reference()?;
