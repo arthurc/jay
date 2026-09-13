@@ -14,8 +14,9 @@ use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::frame::Frame;
-use super::heap::{ArrayKind, ObjectRef};
+use super::heap::{ArrayKind, ObjectRef, PrimitiveElement};
 use super::interpreter::Interpreter;
+use super::mirrors::{MirrorKind, descriptor_for_primitive_name};
 use super::value::Value;
 use crate::{JayError, JayResult};
 
@@ -41,10 +42,57 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 None
             }
             ("java/lang/System", "nanoTime", "()J") => Some(Value::Long(nano_time()?)),
-            ("java/lang/Object", "clone", "()Ljava/lang/Object;") => {
-                let receiver =
-                    receiver.ok_or_else(|| JayError::new("Object.clone needs a receiver"))?;
-                Some(Value::Reference(self.object_clone(receiver)?))
+            ("java/lang/Object", "clone", "()Ljava/lang/Object;") => Some(Value::Reference(
+                self.object_clone(instance_receiver(receiver)?)?,
+            )),
+            ("java/lang/Object", "getClass", "()Ljava/lang/Class;") => {
+                let class_name = self.reference_type_name(instance_receiver(receiver)?)?;
+                Some(Value::Reference(self.class_mirror(&class_name)?))
+            }
+            // HotSpot captures the native backtrace here; Jay reports Java
+            // frames through JayError instead, so the receiver is returned as is.
+            ("java/lang/Throwable", "fillInStackTrace", "(I)Ljava/lang/Throwable;") => {
+                Some(Value::Reference(instance_receiver(receiver)?))
+            }
+            ("java/lang/Class", "registerNatives", "()V") => None,
+            ("java/lang/Class", "getPrimitiveClass", "(Ljava/lang/String;)Ljava/lang/Class;") => {
+                let name = match arguments {
+                    [Value::Reference(name)] => self.java_string(*name)?,
+                    _ => return Err(JayError::new("Class.getPrimitiveClass expected a name")),
+                };
+                if descriptor_for_primitive_name(&name).is_none() {
+                    return Err(JayError::new(format!(
+                        "Class.getPrimitiveClass received unknown type {name}"
+                    )));
+                }
+                Some(Value::Reference(self.class_mirror(&name)?))
+            }
+            // Assertions are always disabled.
+            ("java/lang/Class", "desiredAssertionStatus0", "(Ljava/lang/Class;)Z") => {
+                Some(Value::Int(0))
+            }
+            // JDK 21 answers these natively; JDK 27 reads the injected fields instead.
+            ("java/lang/Class", "isArray", "()Z") => {
+                let kind = self.mirror_kind(instance_receiver(receiver)?)?;
+                Some(Value::Int((kind == MirrorKind::Array) as i32))
+            }
+            ("java/lang/Class", "isPrimitive", "()Z") => {
+                let kind = self.mirror_kind(instance_receiver(receiver)?)?;
+                Some(Value::Int((kind == MirrorKind::Primitive) as i32))
+            }
+            ("java/lang/Class", "isInterface", "()Z") => {
+                let kind = self.mirror_kind(instance_receiver(receiver)?)?;
+                Some(Value::Int((kind == MirrorKind::Interface) as i32))
+            }
+            ("java/lang/reflect/Array", "newArray", "(Ljava/lang/Class;I)Ljava/lang/Object;") => {
+                let (component, length) = match arguments {
+                    [Value::Reference(component), Value::Int(length)] => (*component, *length),
+                    [Value::Null, _] => {
+                        return Err(JayError::fault("java/lang/NullPointerException", None));
+                    }
+                    _ => return Err(JayError::new("Array.newArray expected a Class and an int")),
+                };
+                Some(Value::Reference(self.reflect_new_array(component, length)?))
             }
             // Class-data sharing is a HotSpot start-up optimization; reporting
             // it as disabled makes the JDK take its ordinary initialization paths.
@@ -233,6 +281,33 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Ok(name.trim_end_matches("[]").to_string())
     }
 
+    /// Implements `Array.newArray`: allocates an array whose element type is
+    /// the type mirrored by `component`.
+    fn reflect_new_array(&mut self, component: ObjectRef, length: i32) -> JayResult<ObjectRef> {
+        let length = usize::try_from(length).map_err(|_| {
+            JayError::fault(
+                "java/lang/NegativeArraySizeException",
+                Some(length.to_string()),
+            )
+        })?;
+        let component_name = self.mirrored_class_name(component)?;
+        match descriptor_for_primitive_name(&component_name) {
+            Some("V") => Err(JayError::fault("java/lang/IllegalArgumentException", None)),
+            Some(descriptor) => {
+                let element = PrimitiveElement::from_descriptor(descriptor)?;
+                Ok(self.heap.allocate_primitive_array(element, length))
+            }
+            None => {
+                let descriptor = if component_name.starts_with('[') {
+                    format!("[{component_name}")
+                } else {
+                    format!("[L{component_name};")
+                };
+                Ok(self.heap.allocate_reference_array(descriptor, length))
+            }
+        }
+    }
+
     /// Implements `Object.clone()`: arrays and `Cloneable` instances are copied
     /// shallowly; anything else raises `CloneNotSupportedException`.
     fn object_clone(&mut self, receiver: ObjectRef) -> JayResult<ObjectRef> {
@@ -258,4 +333,9 @@ fn nano_time() -> JayResult<i64> {
         .map_err(|error| JayError::new(format!("system time is before Unix epoch: {error}")))?;
     i64::try_from(duration.as_nanos())
         .map_err(|_| JayError::new("current time nanoseconds exceed long range"))
+}
+
+/// Unwraps the receiver of an instance native.
+fn instance_receiver(receiver: Option<ObjectRef>) -> JayResult<ObjectRef> {
+    receiver.ok_or_else(|| JayError::new("instance native method invoked without a receiver"))
 }

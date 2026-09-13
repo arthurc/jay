@@ -8,6 +8,7 @@ mod heap;
 mod interpreter;
 mod invocation;
 mod lifecycle;
+mod mirrors;
 mod native;
 mod native_runtime;
 mod natives;

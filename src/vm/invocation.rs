@@ -80,59 +80,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
             };
         }
 
-        if method.class_name == "java/lang/Class"
-            && method.name == "desiredAssertionStatus"
-            && method.descriptor == "()Z"
-        {
-            let receiver = frame.pop_object_ref()?;
-            let receiver_class_name = self.heap.instance_class_name(receiver)?;
-            if receiver_class_name != "java/lang/Class" {
-                return Err(JayError::new(format!(
-                    "Class.desiredAssertionStatus receiver was {}",
-                    self.heap.type_name(receiver)?
-                )));
-            }
-
-            frame.stack.push(Value::Int(0));
-            return Ok(());
-        }
-
-        if method.class_name == "java/lang/Throwable"
-            && method.name == "fillInStackTrace"
-            && method.descriptor == "(I)Ljava/lang/Throwable;"
-        {
-            // HotSpot captures the native backtrace here; Jay reports Java
-            // frames through JayError instead, so the receiver is returned as is.
-            frame.pop_int()?;
-            let receiver = frame.pop_object_ref()?;
-            frame.stack.push(Value::Reference(receiver));
-            return Ok(());
-        }
-
-        if method.class_name == "java/lang/Object"
-            && method.name == "getClass"
-            && method.descriptor == "()Ljava/lang/Class;"
-        {
-            let receiver = frame.pop_object_ref()?;
-            let class_name = self.reference_type_name(receiver)?;
-            let mirror = self.class_mirror(&class_name);
-            frame.stack.push(Value::Reference(mirror));
-            self.collect_if_needed(frame);
-            return Ok(());
-        }
-
-        if method.class_name == "java/lang/Class"
-            && method.name == "getName"
-            && method.descriptor == "()Ljava/lang/String;"
-        {
-            let receiver = frame.pop_object_ref()?;
-            let class_name = self.mirrored_class_name(receiver)?;
-            let name = self.new_java_string(class_name.replace('/', "."));
-            frame.stack.push(Value::Reference(name));
-            self.collect_if_needed(frame);
-            return Ok(());
-        }
-
         let target_method_name = method.name.to_string();
         let target_descriptor = method.descriptor.to_string();
         let descriptor = MethodDescriptor::parse(&target_descriptor)?;

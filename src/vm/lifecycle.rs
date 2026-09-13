@@ -46,31 +46,6 @@ impl<'a, W: Write> Interpreter<'a, W> {
         Ok(array)
     }
 
-    pub(super) fn class_mirror(&mut self, class_name: &str) -> ObjectRef {
-        if let Some(reference) = self.class_mirrors.get(class_name) {
-            return *reference;
-        }
-
-        // Class literals load a Class mirror without running the represented class initializer.
-        let reference = self.heap.allocate_instance("java/lang/Class");
-        self.class_mirrors.insert(class_name.to_string(), reference);
-        reference
-    }
-
-    /// Finds the class name represented by a `java.lang.Class` mirror.
-    pub(super) fn mirrored_class_name(&self, mirror: ObjectRef) -> JayResult<String> {
-        self.class_mirrors
-            .iter()
-            .find(|(_, reference)| **reference == mirror)
-            .map(|(class_name, _)| class_name.clone())
-            .ok_or_else(|| {
-                JayError::new(format!(
-                    "expected Class mirror, found {}",
-                    self.heap.type_name(mirror).unwrap_or_default()
-                ))
-            })
-    }
-
     pub(super) fn initialize_class(
         &mut self,
         class_name: &str,

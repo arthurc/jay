@@ -117,3 +117,42 @@ public class Main {
 
     assert_eq!(stdout, "true\n3\ny\n");
 }
+
+#[test]
+fn class_mirrors_describe_primitives_arrays_and_classes() {
+    let stdout = run_main(
+        "class-mirrors",
+        r#"
+public class Main {
+    static int[] numbers = {1, 2};
+    static String[] words = {"a", "b", "c"};
+
+    public static void main(String[] args) {
+        System.out.println(int.class.getName());
+        System.out.println(int.class.isPrimitive());
+        System.out.println(int.class == Integer.TYPE);
+        System.out.println(byte.class == Byte.TYPE);
+        System.out.println(int[].class.getName());
+        System.out.println(int[].class.isArray());
+        System.out.println(int[].class.getComponentType() == int.class);
+        System.out.println(String[].class.getComponentType().getName());
+        System.out.println(numbers.getClass() == int[].class);
+        System.out.println(words.getClass().isArray());
+        System.out.println(String.class.isArray());
+        System.out.println(String.class.isPrimitive());
+        System.out.println(String.class.isInterface());
+        System.out.println(Runnable.class.isInterface());
+        System.out.println(java.util.Arrays.copyOfRange(words, 1, 3)[0]);
+        System.out.println(java.util.Arrays.copyOf(words, 5).length);
+        int[] made = (int[]) java.lang.reflect.Array.newInstance(int.class, 4);
+        System.out.println(made.length);
+    }
+}
+"#,
+    );
+
+    assert_eq!(
+        stdout,
+        "int\ntrue\ntrue\ntrue\n[I\ntrue\ntrue\njava.lang.String\ntrue\ntrue\nfalse\nfalse\nfalse\ntrue\nb\n5\n4\n"
+    );
+}

@@ -9,6 +9,8 @@ pub struct ClassFile {
     pub minor_version: u16,
     pub major_version: u16,
     pub constant_pool: ConstantPool,
+    /// The `access_flags` of the class itself (`ACC_PUBLIC`, `ACC_INTERFACE`, ...).
+    pub access_flags: u16,
     pub this_class: String,
     pub super_class: Option<String>,
     pub interfaces: Vec<String>,
@@ -351,7 +353,7 @@ impl<'a> Parser<'a> {
 
         let constant_pool = self.parse_constant_pool()?;
 
-        let _access_flags = self.read_u2()?;
+        let access_flags = self.read_u2()?;
         let this_class_index = self.read_u2()?;
         let super_class_index = self.read_u2()?;
         let this_class = constant_pool.class_name(this_class_index)?.to_string();
@@ -374,6 +376,7 @@ impl<'a> Parser<'a> {
             minor_version,
             major_version,
             constant_pool,
+            access_flags,
             this_class,
             super_class,
             interfaces,

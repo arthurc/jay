@@ -76,7 +76,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
 - `long` constants, locals, fields, parameters, return values, and the full arithmetic set including shifts, bitwise operators, and `lcmp`
 - Conversions `i2l`, `l2i`, `l2f`, `i2f`, `f2i`, and the narrowing casts `(byte)`, `(char)`, `(short)`
 - Focused `float` support for constants, fields, locals, multiplication, comparison (`fcmpl`/`fcmpg`), and `float` return values
-- Class literals loaded through `ldc` as cached `java.lang.Class` mirrors, with limited `Class.desiredAssertionStatus()` support that reports assertions as disabled
+- `java.lang.Class` mirrors for classes, interfaces, arrays, and primitive types (`int.class`, `Integer.TYPE`, `int[].class`, `Foo.class`, `getClass()`), created once per type and populated with the `name`, `componentType`, `primitive`, and `modifiers` fields the JDK's own `Class.getName()`, `isArray()`, `isPrimitive()`, `isInterface()`, and `getComponentType()` read; `Class.getPrimitiveClass`, `desiredAssertionStatus0` (assertions disabled), and `java.lang.reflect.Array.newArray` run as natives, so `Arrays.copyOf`/`copyOfRange` on reference arrays work
 - Integer comparisons, branches, loops, `goto_w`, and `switch` on `int` through both `tableswitch` and `lookupswitch`
 - `instanceof` against classes, interfaces, and reference array types
 - Operand stack shuffles `dup`, `dup_x1`, `dup_x2`, `dup2`, `dup2_x1`, `swap`, `pop`, and `pop2`
@@ -106,7 +106,7 @@ cargo run -- -cp /tmp/jay-demo/classes com.example.Main first "second arg"
 - Focused date/time shims for `System.currentTimeMillis()`, `Date.getTime()`, `Date.toString()`, `LocalDateTime.now()`, `TimeZone.getTimeZone(String)`, `SimpleDateFormat.setTimeZone(TimeZone)`, and `SimpleDateFormat` patterns `hh.mm aa` and `dd/MM/yyyy  HH:mm:ss z` with limited GMT/UTC/IST formatting
 - Constructor expression statements (for example `new Empty();`)
 - Native methods dispatched through a Rust native table when resolution reaches an `ACC_NATIVE` method: `System.arraycopy` (primitive and reference arrays, with HotSpot's `ArrayIndexOutOfBoundsException`/`ArrayStoreException` messages), `System.nanoTime()`, `Object.clone()` on arrays and `Cloneable` instances, and the `jdk.internal.misc.CDS` stubs that let `List.of(...)` and other CDS-aware JDK initializers run
-- Java exceptions: `throw`, `try`/`catch`/`finally`, multi-catch, handler selection by exception type through the class hierarchy, and propagation across interpreted frames; JDK exception constructors run as bytecode with `Throwable.fillInStackTrace(int)`, `Object.getClass()`, and `Class.getName()` shimmed so `getMessage()` and `toString()` work
+- Java exceptions: `throw`, `try`/`catch`/`finally`, multi-catch, handler selection by exception type through the class hierarchy, and propagation across interpreted frames; JDK exception constructors run as bytecode with `Throwable.fillInStackTrace(int)` and `Object.getClass()` provided as natives so `getMessage()` and `toString()` work
 - VM faults surface as Java exceptions that can be caught: `NullPointerException`, `ArithmeticException` (`/ by zero`), `ArrayIndexOutOfBoundsException`, `ArrayStoreException`, `ClassCastException`, `NegativeArraySizeException`, `StringIndexOutOfBoundsException`, and `NumberFormatException`, with HotSpot-style messages
 - Uncaught exceptions print `Exception in thread "main" <class>: <message>` followed by the interpreted Java frames, and exit with a failure status
 - Class files with major versions 45 through 71 (Java 1.1 through Java 27)

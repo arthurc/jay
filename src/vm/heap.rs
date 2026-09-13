@@ -88,6 +88,24 @@ impl PrimitiveElement {
     }
 
     /// The array descriptor for this element type, such as `[I`.
+    /// Decodes a primitive field descriptor such as `I`. `double` (`D`) is rejected
+    /// because the VM has no double values.
+    pub(super) fn from_descriptor(descriptor: &str) -> JayResult<Self> {
+        match descriptor {
+            "Z" => Ok(Self::Boolean),
+            "C" => Ok(Self::Char),
+            "F" => Ok(Self::Float),
+            "D" => Err(JayError::new("unsupported array element type double")),
+            "B" => Ok(Self::Byte),
+            "S" => Ok(Self::Short),
+            "I" => Ok(Self::Int),
+            "J" => Ok(Self::Long),
+            other => Err(JayError::new(format!(
+                "invalid primitive array element type {other}"
+            ))),
+        }
+    }
+
     pub(super) fn array_descriptor(self) -> &'static str {
         match self {
             Self::Boolean => "[Z",

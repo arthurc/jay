@@ -90,7 +90,7 @@ impl<'a, W: Write> Interpreter<'a, W> {
         }
 
         if let Ok(class_name) = constant_pool.class_name(index) {
-            let reference = self.class_mirror(class_name);
+            let reference = self.class_mirror(class_name)?;
             frame.stack.push(Value::Reference(reference));
             self.collect_if_needed(frame);
             return Ok(());
