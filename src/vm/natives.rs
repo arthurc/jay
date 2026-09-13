@@ -69,6 +69,9 @@ impl<'a, W: Write> Interpreter<'a, W> {
                 [Value::Null] => Some(Value::Int(0)),
                 _ => return Err(JayError::new("System.identityHashCode expected an object")),
             },
+            // JDK 21 asks StringUTF16 directly; the answer must agree with the
+            // little-endian UTF-16 layout strings.rs and UnsafeConstants use.
+            ("java/lang/StringUTF16", "isBigEndian", "()Z") => Some(Value::Int(0)),
             ("java/lang/String", "intern", "()Ljava/lang/String;") => {
                 let text = self.java_string(instance_receiver(receiver)?)?;
                 Some(Value::Reference(self.intern_string(&text)?))
